@@ -5,14 +5,21 @@ LABELIT, xia2, DIALS, and Phenix with GUI).  Not all of these can be downloaded
 via the web (yet).
 """
 
-from __future__ import division
-from bootstrap import Toolbox
-from installer_utils import *
-import os.path as op
+from __future__ import absolute_import, division
+
 import os
+import os.path as op
 import platform
 import sys
 import urllib2
+
+try:
+  from .bootstrap import Toolbox
+  from .installer_utils import *
+except ValueError:
+  # When run from bootstrap the auto_build directory will be in the path
+  from bootstrap import Toolbox
+  from installer_utils import *
 
 BASE_CCI_PKG_URL = "http://cci.lbl.gov/cctbx_dependencies"
 
@@ -21,11 +28,11 @@ def get_pypi_package_information(package, version=None, information_only=False):
   metadata = 'https://pypi.python.org/pypi/' + package + '/json'
   try:
     import json
-  except ImportError: # Python <=2.5
+    pypidata = urllib2.urlopen(metadata).read()
+  except Exception: # Python <=2.5, TLS <1.2, ...
     if information_only:
       return {'name': '', 'version': '', 'summary': ''}
     raise
-  pypidata = urllib2.urlopen(metadata).read()
   pkginfo = json.loads(pypidata)
   if information_only:
     return pkginfo['info']
@@ -42,40 +49,43 @@ def get_pypi_package_information(package, version=None, information_only=False):
   return package
 
 DEPENDENCIES_BASE = "https://cdn.rawgit.com/dials/dependencies/master/"
-OPENSSL_PKG = "openssl-1.0.2m.tar.gz"    # OpenSSL
-PYTHON3_PKG = "Python-3.6.3.tgz"
+OPENSSL_PKG = "openssl-1.0.2n.tar.gz"    # OpenSSL
+PYTHON3_PKG = "Python-3.6.5.tgz"
+PYTHON_PKG = "Python-2.7.15.tgz"
 
 # from CCI
-PYTHON_PKG = "Python-2.7.14.tgz"
 IMAGING_PKG = "Imaging-1.1.7.tar.gz"     # for labelit, gltbx
 REPORTLAB_PKG = "reportlab-2.6.tar.gz"   # for labelit
 ZLIB_PKG = "zlib-1.2.8.tar.gz"
-SCIPY_PKG = "scipy-0.14.0.tar.gz"        # not used by default
 PYRTF_PKG = "PyRTF-0.45.tar.gz"          # for phenix.table_one, etc.
 BIOPYTHON_PKG = "biopython-1.68.tar.gz"  # used in iotbx
 IPYTHON_PKG = "ipython-3.2.1.tar.gz"     # IPython
 LIBSVM_PKG = "libsvm-3.17_cci.tar.gz"
 
 # from PyPi
-CYTHON_VERSION="0.22"
+CYTHON_VERSION="0.27.3"
 DOCUTILS_VERSION="0.12"
 FUTURE_VERSION="0.16"
-JINJA2_VERSION = "2.9.6"
+H5PY_VERSION="2.7.1"
 JUNIT_XML_VERSION="1.7"
 MOCK_VERSION="2.0.0"
-NUMPY_VERSION="1.8.2"
-NUMPYDOC_VERSION="0.5" # related to Sphinx (not numpy) for documentation
+NUMPY_VERSION="1.13.3"
 PILLOW_VERSION = "4.2.1"
-PYTEST_VERSION="3.2.3"
+PYTEST_VERSION="3.4.1"
+PYTEST_XDIST_VERSION="1.22.2"
 SIX_VERSION="1.11.0"
-SPHINX_VERSION="1.4.4" # for documentation
+SPHINX_VERSION="1.7.2" # for documentation
 MPI4PY_VERSION="3.0.0"
+JINJA2_VERSION = "2.9.6"
+ORDEREDSET_VERSION = "2.0"
+PROCRUNNER_VERSION = "0.6.1"
+TABULATE_VERSION = "0.8.2"
+SCIPY_VERSION = "1.0.0"
+SCIKIT_LEARN_VERSION = "0.19.1"
 
 # HDF5
 BASE_HDF5_PKG_URL = "https://support.hdfgroup.org/ftp/HDF5/releases/hdf5-1.10/hdf5-1.10.1/src/"
 HDF5_PKG = "hdf5-1.10.1.tar.bz2"
-BASE_H5PY_PKG_URL = "https://pypi.python.org/packages/41/7a/6048de44c62fc5e618178ef9888850c3773a9e4be249e5e673ebce0402ff" # workaround because Python <2.7.9
-H5PY_PKG = "h5py-2.7.1.tar.gz" # dxtbx
 
 # GUI dependencies
 LIBPNG_PKG = "libpng-1.5.26.tar.gz"
@@ -121,7 +131,7 @@ PYOPENGL_PKG = "PyOpenGL-3.1.0.tar.gz"
 SEND2TRASH_PKG = "Send2Trash-1.3.0.tar.gz"
 
 # Windows precompiled compiled base packages
-WIN64PYTHON_PKG = "python2.7.12_x86_64_plus_relocatable.zip"
+WIN64PYTHON_PKG = "Python2.7.15_x86_64_plus_relocatable.zip"
 WIN32PYTHON_PKG = "python2.7.12_x86_32_plus_relocatable.zip"
 WIN64HDF5_PKG = "HDF5-1.8.16-win64.zip"
 WIN32HDF5_PKG = "HDF5-1.8.16-win32.zip"
@@ -253,7 +263,7 @@ def fetch_all_dependencies (dest_dir,
     copy_files=copy_files)
   for pkg_name in [
       PYTHON_PKG, IMAGING_PKG, REPORTLAB_PKG, ZLIB_PKG,
-      SCIPY_PKG, PYRTF_PKG, BIOPYTHON_PKG,
+      PYRTF_PKG, BIOPYTHON_PKG,
       IPYTHON_PKG,
     ] :
     fetch_package(pkg_name)

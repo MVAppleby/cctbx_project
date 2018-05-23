@@ -50,7 +50,7 @@ master_phil = iotbx.phil.parse("""
       .help = File with NCS information (typically point-group NCS with \
                the center specified). Typically in  PDB format. \
               Can also be a .ncs_spec file from phenix. \
-              Created automatically if ncs_type is specified.
+              Created automatically if symmetry is specified.
       .short_caption = NCS info file
 
     seq_file = None
@@ -204,7 +204,11 @@ master_phil = iotbx.phil.parse("""
        .short_caption = high_resolution blurring
        .help = Blur high_resolution data (higher than d_cut) with \
              this b-value. Contrast with b_sharpen applied to data up to\
-             d_cut.
+             d_cut. \
+             Note on defaults: If None and b_sharpen is positive (sharpening) \
+             then high-resolution data is left as is (not sharpened). \
+             If None and b_sharpen is negative (blurring) high-resolution data\
+             is also blurred.
 
      resolution_dependent_b = None
        .type = floats
@@ -275,7 +279,8 @@ master_phil = iotbx.phil.parse("""
           b_iso_to_d_cut applies b_iso only up to resolution specified, with \
           fall-over of k_sharpen.  Resolution dependent adjusts 3 parameters \
           to sharpen variably over resolution range. Default is \
-          b_iso_to_d_cut .
+          b_iso_to_d_cut . target_b_iso_to_d_cut uses target_b_iso_ratio \
+          to set b_iso.
 
      box_in_auto_sharpen = False
        .type = bool
@@ -446,12 +451,21 @@ master_phil = iotbx.phil.parse("""
            strong.  Note 2: if k_sharpen is zero or None, then no \
            transition is applied and all data is sharpened or blurred. \
 
-     optimize_k_sharpen = None
+     iterate = False
        .type = bool
-       .short_caption = Optimize value of k_sharpen
-       .help = Optimize value of k_sharpen. \
+       .short_caption = Iterate auto-sharpening
+       .help = You can iterate auto-sharpening. This is useful in cases where \
+                 you do not specify the solvent content and it is not \
+                 accurately estimated until sharpening is optimized.
+
+     optimize_b_blur_hires = False
+       .type = bool
+       .short_caption = Optimize value of b_blur_hires
+       .help = Optimize value of b_blur_hires. \
                 Only applies for auto_sharpen_methods b_iso_to_d_cut and \
-                b_iso.
+                b_iso. This is normally carried out and helps prevent \
+                over-blurring at high resolution if the same map is \
+                sharpened more than once.
 
      optimize_d_cut = None
        .type = bool
@@ -681,12 +695,21 @@ def set_sharpen_params(params,out=sys.stdout):
         "\nand sharpening method is %s" %(
         params.map_modification.auto_sharpen_methods[0])
 
-  if params.map_modification.optimize_k_sharpen and \
+  if params.map_modification.optimize_b_blur_hires and \
     not 'b_iso_to_d_cut' in params.map_modification.auto_sharpen_methods and \
        not 'b_iso' in params.map_modification.auto_sharpen_methods:
-     print >>out,"Set optimize_k_sharpen=False as neither b_iso_to_d_cut nor"+\
+     print >>out,\
+          "Set optimize_b_blur_hires=False as neither b_iso_to_d_cut nor"+\
          " b_iso are used"
-     params.map_modification.optimize_k_sharpen=False
+     params.map_modification.optimize_b_blur_hires=False
+  if params.map_modification.iterate and \
+    not 'b_iso_to_d_cut' in params.map_modification.auto_sharpen_methods and \
+       not 'b_iso' in params.map_modification.auto_sharpen_methods:
+     print >>out,\
+          "Set iterate=False as neither b_iso_to_d_cut nor"+\
+         " b_iso are used"
+     params.map_modification.iterate=False
+
 
   return params
 
@@ -784,7 +807,7 @@ def get_map_and_model(params=None,
   if params.crystal_info.resolution >= 10:
     print >>out,"\n** WARNING: auto_sharpen is designed for maps at a "+\
       "resolution of about 4.5 A\nor better.  Sharpening may be"+\
-      "poor at %7.0f A" %(resolution)
+      "poor at %7.0f A" %(params.crystal_info.resolution)
 
 
   if params.input_files.pdb_file and not pdb_inp: # get model
@@ -850,7 +873,6 @@ def run(args=None,params=None,
      map_coords_inside_cell=False,
      crystal_symmetry=crystal_symmetry,
      params=params,out=out)
-
   # NOTE: map_data is now relative to origin at (0,0,0).
   # Use map_data.reshape(acc) to put it back where it was if acc is not None
 
@@ -913,7 +935,8 @@ def run(args=None,params=None,
         mask_atoms_atom_radius=params.map_modification.mask_atoms_atom_radius,
         value_outside_atoms=params.map_modification.value_outside_atoms,
         k_sharpen=params.map_modification.k_sharpen,
-        optimize_k_sharpen=params.map_modification.optimize_k_sharpen,
+        optimize_b_blur_hires=params.map_modification.optimize_b_blur_hires,
+        iterate=params.map_modification.iterate,
         optimize_d_cut=params.map_modification.optimize_d_cut,
         soft_mask=params.map_modification.soft_mask,
         allow_box_if_b_iso_set=params.map_modification.allow_box_if_b_iso_set,

@@ -373,24 +373,38 @@ class AdvancedSettingsDialog(BaseDialog):
     self.analysis_sizer = wx.StaticBoxSizer(analysis_box, wx.VERTICAL)
 
     # Processing back-ends
-    self.back_ends = ['DIALS', 'LABELIT']
-    self.dispatchers = ['cctbx.xfel.xtc_process', 'cxi.xtc_process']
+    self.dispatchers_sizer = wx.BoxSizer(wx.HORIZONTAL)
+    self.back_ends = ['cctbx.xfel.xtc_process', 'cctbx.xfel.process', 'dials.stills_process', 'LABELIT', 'custom']
+    self.dispatchers = ['cctbx.xfel.xtc_process', 'cctbx.xfel.process', 'dials.stills_process', 'cxi.xtc_process', 'custom']
     self.back_end = gctr.ChoiceCtrl(self,
                                     label='Processing back end:',
                                     label_size=(180, -1),
                                     label_style='bold',
+                                    ctrl_size=(200, -1),
                                     choices=self.back_ends)
-    self.analysis_sizer.Add(self.back_end, flag=wx.EXPAND | wx.ALL, border=10)
+    self.Bind(wx.EVT_CHOICE, self.onBackendChoice)
+    self.dispatchers_sizer.Add(self.back_end, flag=wx.ALIGN_LEFT)
+
+    self.custom_dispatcher = gctr.TextCtrl(self,
+                                           ctrl_size=(300, -1),
+                                           value="")
+    self.dispatchers_sizer.Add(self.custom_dispatcher, flag=wx.EXPAND | wx.ALL)
+
     try:
       self.back_end.ctr.SetSelection(self.dispatchers.index(params.dispatcher))
+      self.custom_dispatcher.Hide()
     except ValueError:
-      pass
+      self.back_end.ctr.SetSelection(len(self.dispatchers)-1)
+      self.custom_dispatcher.ctr.SetValue(params.dispatcher)
+
+    self.analysis_sizer.Add(self.dispatchers_sizer, flag=wx.EXPAND | wx.ALL, border=10)
 
     img_types = ['corrected', 'raw']
     self.avg_img_type = gctr.ChoiceCtrl(self,
                                         label='Avg. Image Type:',
                                         label_size=(180, -1),
                                         label_style='bold',
+                                        ctrl_size=(200, -1),
                                         choices=img_types)
     if params.average_raw_data:
       i = img_types.index('raw')
@@ -435,8 +449,19 @@ class AdvancedSettingsDialog(BaseDialog):
       self.nproc.ctr.SetValue(1)
       self.nproc.ctr.SetIncrement(1)
 
+  def onBackendChoice(self, e):
+    self.params.dispatcher = self.dispatchers[self.back_end.ctr.GetSelection()]
+    if self.params.dispatcher == 'custom':
+      self.custom_dispatcher.Show()
+      self.Layout()
+    else:
+      self.custom_dispatcher.Hide()
+      self.Layout()
+
   def onOK(self, e):
     self.params.dispatcher = self.dispatchers[self.back_end.ctr.GetSelection()]
+    if self.params.dispatcher == 'custom':
+      self.params.dispatcher = self.custom_dispatcher.ctr.GetValue()
     self.params.mp.method = self.mp_option.ctr.GetStringSelection()
     self.params.mp.queue = self.queue.ctr.GetStringSelection()
     self.params.mp.nproc = int(self.nproc.ctr.GetValue())
@@ -670,58 +695,33 @@ class AveragingDialog(BaseDialog):
     BaseDialog.__init__(self, parent, label_style=label_style,
                         content_style=content_style, *args, **kwargs)
 
-    # Calib folder
-    self.calib_dir = gctr.TextButtonCtrl(self,
-                                         label='Calibration:',
-                                         label_style='normal',
-                                         label_size=(150, -1),
-                                         ctrl_size=(350, -1),
-                                         big_button=True)
-    self.main_sizer.Add(self.calib_dir, flag=wx.EXPAND | wx.ALL, border=10)
-    self.Bind(wx.EVT_BUTTON, self.onCalibDirBrowse, self.calib_dir.btn_big)
-
-    # Detector Address
-    self.address = gctr.TextButtonCtrl(self,
-                                       label='Detector Address:',
-                                       label_style='bold',
-                                       label_size=(150, -1),
-                                       value='')
-    self.main_sizer.Add(self.address, flag=wx.EXPAND | wx.ALL, border=10)
-
-    # Raw vs. corrected
-    img_types = ['raw', 'corrected']
-    self.avg_img_type = gctr.ChoiceCtrl(self,
-                                        label='Avg. Image Type:',
-                                        label_size=(150, -1),
-                                        label_style='bold',
-                                        choices=img_types)
-    self.main_sizer.Add(self.avg_img_type, flag=wx.EXPAND | wx.ALL, border=10)
-
-    # DetZ
-    self.detz = gctr.OptionCtrl(self,
-                                label='DetZ:',
-                                label_style='bold',
-                                label_size=(150, -1),
-                                ctrl_size=(100, -1),
-                                items=[('DetZ', 580)])
-    self.main_sizer.Add(self.detz, flag=wx.EXPAND | wx.ALL, border=10)
+    # Raw image option
+    self.raw_toggle = gctr.RadioCtrl(self,
+                                     label='',
+                                     label_style='normal',
+                                     label_size=(-1, -1),
+                                     direction='horizontal',
+                                     items={'corrected':'corrected',
+                                            'raw':'raw'})
+    self.raw_toggle.corrected.SetValue(1)
+    self.main_sizer.Add(self.raw_toggle, flag=wx.EXPAND | wx.ALL, border=10)
 
     # Dialog control
     dialog_box = self.CreateSeparatedButtonSizer(wx.OK | wx.CANCEL)
     self.main_sizer.Add(dialog_box,
                         flag=wx.EXPAND | wx.ALIGN_RIGHT | wx.ALL,
                         border=10)
+    self.Bind(wx.EVT_BUTTON, self.onOK, id=wx.ID_OK)
 
-  def onCalibDirBrowse(self, e):
-    dlg = wx.DirDialog(self, "Choose calibration directory:",
-                       style=wx.DD_DEFAULT_STYLE)
-
-    if dlg.ShowModal() == wx.ID_OK:
-      self.calib_dir.ctr.SetValue(dlg.GetPath())
-    dlg.Destroy()
+  def onOK(self, e):
+    from xfel.ui.components.averaging import AveragingCommand
+    from libtbx import easy_run
+    raw = self.raw_toggle.raw.GetValue() == 1
+    average_command = AveragingCommand(self.run, self.params, raw)()
+    print "executing", average_command
+    result = easy_run.fully_buffered(average_command)
+    result.show_stdout()
     e.Skip()
-
-    self.SetTitle('Averaging Settings')
 
 class TrialTagSelectionDialog(BaseDialog):
   def __init__(self, parent,
@@ -1147,8 +1147,12 @@ class RunBlockDialog(BaseDialog):
             return 12.5 # Defaults are from kapton tape experiments (this is kapton ring)
           elif item == "two_theta_high":
             return 22.8 # Defaults are from kapton tape experiments (this is water ring)
-          else:
+          elif item in ["extra_phil_str", "calib_dir", "dark_avg_path", "dark_stddev_path",
+            "gain_map_path", "beamx", "beamy", "gain_mask_level", "untrusted_pixel_mask_path",
+            "binning", "energy", "comment", "config_str"]:
             return None
+          else:
+            raise AttributeError(item)
       block = defaults()
 
     else:
@@ -1344,6 +1348,7 @@ class RunBlockDialog(BaseDialog):
                                        label='Comment:',
                                        label_style='normal',
                                        label_size=(100, -1))
+    self.comment.ctr.SetValue(str(block.comment))
     self.runblock_sizer.Add(self.comment, flag=wx.EXPAND | wx.ALL,
                             border=10)
 
@@ -1622,6 +1627,92 @@ class RunBlockDialog(BaseDialog):
     dlg.Destroy()
     e.Skip()
 
+class SelectRunBlocksDialog(BaseDialog):
+  def __init__(self, parent, trial,
+               label_style='bold',
+               content_style='normal',
+               db=None,
+               *args, **kwargs):
+    BaseDialog.__init__(self, parent, label_style=label_style,
+                        content_style=content_style, *args, **kwargs)
+
+    self.db = db
+    self.trial = trial
+
+    self.top_sizer = wx.BoxSizer(wx.HORIZONTAL)
+
+    self.button_panel = wx.Panel(self)
+    self.button_sizer = wx.BoxSizer(wx.VERTICAL)
+    self.button_panel.SetSizer(self.button_sizer)
+
+    self.runblocks_panel = ScrolledPanel(self, size=(500, 400))
+
+    # Populate rungroups with current values from db
+    self.trial_rungroups = [t.id for t in trial.rungroups]
+    self.all_rungroups = self.db.get_all_rungroups()
+    choices = []
+    selected = []
+    for rungroup in self.all_rungroups:
+      selected.append(rungroup.id in self.trial_rungroups)
+      if rungroup.endrun is None:
+        desc = "[%d] %d+"%(rungroup.id, rungroup.startrun)
+      else:
+        desc = "[%d] %d-%d"%(rungroup.id, rungroup.startrun, rungroup.endrun)
+      if rungroup.comment is not None:
+        desc += " " + rungroup.comment
+
+      choices.append(desc)
+
+    self.runblocks_list = gctr.CheckListCtrl(self.runblocks_panel,
+                                             label='Select runblocks',
+                                             label_size=(40, -1),
+                                             label_style='normal',
+                                             ctrl_size=(450, 350),
+                                             direction='vertical',
+                                             choices=choices)
+    for i in xrange(len(selected)):
+      self.runblocks_list.ctr.Check(i, selected[i])
+
+    self.runblocks_sizer = wx.BoxSizer(wx.VERTICAL)
+    self.runblocks_panel.SetSizer(self.runblocks_sizer)
+
+    self.runblocks_sizer.Add(self.runblocks_list, 1, flag=wx.EXPAND)
+
+    # Add panels to main sizer
+    self.top_sizer.Add(self.button_panel,
+                       flag=wx.LEFT, border=10)
+    self.top_sizer.Add(self.runblocks_panel,
+                       flag=wx.EXPAND | wx.RIGHT | wx.LEFT, border=10)
+    self.main_sizer.Add(self.top_sizer,
+                        flag=wx.EXPAND| wx.TOP | wx.BOTTOM, border=10)
+    # Dialog control
+    dialog_box = self.CreateSeparatedButtonSizer(wx.OK | wx.CANCEL)
+    self.main_sizer.Add(dialog_box,
+                   flag=wx.EXPAND | wx.ALIGN_RIGHT | wx.ALL,
+                   border=10)
+
+    self.Layout()
+    self.SetTitle('Select run blocks')
+
+    # Button bindings
+    self.Bind(wx.EVT_BUTTON, self.onOK, id=wx.ID_OK)
+
+  def onOK(self, e):
+    trial_rungroups = [t.id for t in self.db.get_trial_rungroups(self.trial.id, only_active=False)]
+    trials = self.db.get_all_trials()
+
+    for i, rungroup in enumerate(self.all_rungroups):
+      if self.runblocks_list.ctr.IsChecked(i):
+        if not rungroup.id in trial_rungroups:
+          self.trial.add_rungroup(rungroup)
+        rungroup.active = True
+      else:
+        if rungroup.id in trial_rungroups:
+          self.trial.remove_rungroup(rungroup)
+        if not any([rungroup.id in [rg.id for rg in t.rungroups] for t in trials]):
+          rungroup.active = False
+
+    e.Skip()
 
 class TrialDialog(BaseDialog):
   def __init__(self, parent, db,
@@ -1809,19 +1900,21 @@ class TrialDialog(BaseDialog):
       target_phil_str = self.phil_box.GetValue()
 
       # Parameter validation
-      backend = ['labelit', 'dials'][['cxi.xtc_process', 'cctbx.xfel.xtc_process'].index(self.db.params.dispatcher)]
-      if backend == 'labelit':
+      dispatcher = self.db.params.dispatcher
+      if dispatcher == 'cxi.xtc_process': #LABELIT
         from spotfinder.applications.xfel import cxi_phil
         phil_scope = cxi_phil.cxi_versioned_extract().persist.phil_scope
-      elif backend == 'dials':
-        from xfel.command_line.xtc_process import phil_scope
+      else:
+        from xfel.ui import known_dials_dispatchers
+        import importlib
+        phil_scope = importlib.import_module(known_dials_dispatchers[dispatcher]).phil_scope
 
       from iotbx.phil import parse
       msg = None
       try:
         trial_params, unused = phil_scope.fetch(parse(target_phil_str), track_unused_definitions = True)
       except Exception, e:
-        msg = '\nParameters incompatible with %s:\n%s\n' % (backend, str(e))
+        msg = '\nParameters incompatible with %s dispatcher:\n%s\n' % (dispatcher, str(e))
       else:
         if len(unused) > 0:
           msg = [str(item) for item in unused]

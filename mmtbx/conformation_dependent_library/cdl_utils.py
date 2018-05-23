@@ -30,10 +30,14 @@ def get_c_ca_n(atom_group, return_subset=False):
         break
   return tmp, outl
 
-def round_to_ten(d):
-  t = int(round((float(d))/10))*10
-  if t==180: return -180
+def round_to_int(d, n=10, wrap=True):
+  t = int(round((float(d))/int(n)))*int(n)
+  if wrap:
+    if t==180: return -180
   return t
+
+def round_to_ten(d):
+  return round_to_int(d, 10)
 
 def get_res_type_group(resname1, resname2):
   resname1=resname1.strip()

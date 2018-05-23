@@ -18,6 +18,7 @@
 #include <scitbx/constants.h>
 #include <scitbx/array_family/simple_io.h>
 #include <scitbx/array_family/simple_tiny_io.h>
+#include <scitbx/array_family/shared.h>
 #include <dxtbx/error.h>
 #include "model_helpers.h"
 
@@ -35,7 +36,7 @@ namespace dxtbx { namespace model {
    * A class to represent the rotation axis for a standard rotation
    * geometry diffraction data set.
    *
-   * The rotation axis assumed to have it's origin at the origin of the
+   * The rotation axis assumed to have its origin at the origin of the
    * laboratory coordinate system. The rotation axis vector is normalized
    * when set using either the constructor or the rotation axis 'setter'
    *
@@ -146,6 +147,22 @@ namespace dxtbx { namespace model {
       return setting_rotation_;
     }
 
+    /** Get the number of scan points */
+    std::size_t get_num_scan_points() const {
+      return setting_rotation_at_scan_points_.size();
+    }
+
+    /** Get the setting rotation at scan points */
+    scitbx::af::shared< mat3<double> > get_setting_rotation_at_scan_points() const {
+      return setting_rotation_at_scan_points_;
+    }
+
+    /** Get the setting rotation at the scan point */
+    mat3<double> get_setting_rotation_at_scan_point(std::size_t index) const {
+      DXTBX_ASSERT(index < setting_rotation_at_scan_points_.size());
+      return setting_rotation_at_scan_points_[index];
+    }
+
     /** Set the rotation axis */
     void set_rotation_axis(vec3 <double> rotation_axis) {
       DXTBX_ASSERT(rotation_axis.length() > 0);
@@ -168,13 +185,42 @@ namespace dxtbx { namespace model {
       setting_rotation_ = setting_rotation;
     }
 
+    /** Set the setting rotation matrix at scan-points */
+    void set_setting_rotation_at_scan_points(const scitbx::af::const_ref< mat3<double> > &S) {
+      setting_rotation_at_scan_points_ = scitbx::af::shared< mat3<double> >(S.begin(), S.end());
+    }
+
+    /** Reset the scan points */
+    void reset_scan_points() {
+      setting_rotation_at_scan_points_.clear();
+    }
+
     /** Check rotation axes are (almost) the same */
-    bool operator==(const Goniometer &b) const {
+    bool operator==(const Goniometer &rhs) const {
       double eps = 1.0e-6;
 
-      return std::abs(angle_safe(rotation_axis_, b.rotation_axis_)) <= eps
-      && fixed_rotation_.const_ref().all_approx_equal(b.fixed_rotation_.const_ref(), eps)
-      && setting_rotation_.const_ref().all_approx_equal(b.setting_rotation_.const_ref(), eps);
+      // scan-varying model checks
+      if (get_num_scan_points() > 0) {
+        if (get_num_scan_points() != rhs.get_num_scan_points()) {
+          return false;
+        }
+        for (std::size_t j = 0; j < get_num_scan_points(); ++j) {
+          mat3<double> this_S = get_setting_rotation_at_scan_point(j);
+          mat3<double> other_S = rhs.get_setting_rotation_at_scan_point(j);
+          double d_S = 0.0;
+          for (std::size_t i = 0; i < 9; ++i) {
+            d_S += std::abs(this_S[i] - other_S[i]);
+          }
+          if (d_S > eps) {
+            return false;
+          }
+        }
+      }
+
+      // static model checks
+      return std::abs(angle_safe(rotation_axis_, rhs.rotation_axis_)) <= eps
+      && fixed_rotation_.const_ref().all_approx_equal(rhs.fixed_rotation_.const_ref(), eps)
+      && setting_rotation_.const_ref().all_approx_equal(rhs.setting_rotation_.const_ref(), eps);
     }
 
     /** Check rotation axes are not (almost) the same */
@@ -182,13 +228,27 @@ namespace dxtbx { namespace model {
       return !(*this == goniometer);
     }
 
-    bool is_similar_to(const Goniometer &b,
+    bool is_similar_to(const Goniometer &rhs,
                        double rotation_axis_tolerance,
                        double fixed_rotation_tolerance,
                        double setting_rotation_tolerance) const {
-      return std::abs(angle_safe(rotation_axis_, b.rotation_axis_)) <= rotation_axis_tolerance
-      && fixed_rotation_.const_ref().all_approx_equal(b.fixed_rotation_.const_ref(), fixed_rotation_tolerance)
-      && setting_rotation_.const_ref().all_approx_equal(b.setting_rotation_.const_ref(), setting_rotation_tolerance);
+
+      // scan-varying model checks
+      if (get_num_scan_points() != rhs.get_num_scan_points()) {
+        return false;
+      }
+      for (std::size_t i = 0; i < get_num_scan_points(); ++i) {
+        mat3<double> S_a = get_setting_rotation_at_scan_point(i);
+        mat3<double> S_b = rhs.get_setting_rotation_at_scan_point(i);
+        if (!S_a.const_ref().all_approx_equal(S_b.const_ref(), setting_rotation_tolerance)) {
+          return false;
+        }
+      }
+
+      // static model checks
+      return std::abs(angle_safe(rotation_axis_, rhs.rotation_axis_)) <= rotation_axis_tolerance
+      && fixed_rotation_.const_ref().all_approx_equal(rhs.fixed_rotation_.const_ref(), fixed_rotation_tolerance)
+      && setting_rotation_.const_ref().all_approx_equal(rhs.setting_rotation_.const_ref(), setting_rotation_tolerance);
     }
 
     /** Rotate the goniometer about an axis */
@@ -206,6 +266,7 @@ namespace dxtbx { namespace model {
     vec3 <double> rotation_axis_;
     mat3 <double> fixed_rotation_;
     mat3 <double> setting_rotation_;
+    scitbx::af::shared< mat3<double> > setting_rotation_at_scan_points_;
   };
 
   /** Print goniometer data */

@@ -653,7 +653,8 @@ class analyze_measurability(scaling.xtriage_analysis):
       graph_columns=[[0,1,2]],
       data=[list(d_star_sq), list(meas_data), list(smooth_approx)],
       x_is_inverse_d_min=True,
-      reference_marks=ref_marks)
+      reference_marks=ref_marks,
+      force_exact_x_labels=True)
 
   def _show_impl (self, out) :
     out.show_sub_header("Measurability of anomalous signal")
@@ -928,14 +929,39 @@ class anomalous (scaling.xtriage_analysis) :
 
     if (hasattr(self, 'plan_sad_experiment_stats') and
         (self.plan_sad_experiment_stats is not None)):
-       out.show_header(
-       "Analysis of probability of finding %d sites with this anomalous data" %(
-          self.plan_sad_experiment_stats.sites))
-       if (out.gui_output):
-         self.plan_sad_experiment_stats.show_in_wxgui(out=out)
-       else:
-         self.plan_sad_experiment_stats.show_summary(out=out)
+      out.show_header("Analysis of probability of finding %d sites with this anomalous data" %(
+        self.plan_sad_experiment_stats.sites))
+      if (out.gui_output):
+        self.plan_sad_experiment_stats.show_in_wxgui(out=out)
+      else:
+        self.plan_sad_experiment_stats.show_summary(out=out)
 
+  def summarize_issues(self):
+    '''
+    Traffic light
+    '''
+    issues = list()
+    if (hasattr(self, 'plan_sad_experiment_stats') and
+        (self.plan_sad_experiment_stats is not None)):
+      p_substr = self.plan_sad_experiment_stats.get_p_substr()
+      # round to nearest 5% when below 97%, otherwise round to nearest 1%
+      if (p_substr < 97):
+        p_substr = int(5.0*round(p_substr/5.0))
+      else:
+        p_substr = int(round(p_substr))
+      sites = self.plan_sad_experiment_stats.sites
+      message = 'The probability of finding %i sites with this data is around %i%%.' %\
+                (sites, p_substr)
+      section_name = 'Probability of finding sites and expected FOM'
+      hi_limit = 85.0
+      lo_limit = 50.0
+      if (p_substr >= hi_limit):
+        issues.append((0, message, section_name))
+      elif ( (p_substr >= lo_limit) and (p_substr < hi_limit) ):
+        issues.append((1, message, section_name))
+      elif (p_substr < lo_limit):
+        issues.append((2, message, section_name))
+    return issues
 
 class wilson_scaling (scaling.xtriage_analysis) :
   """
@@ -1117,7 +1143,8 @@ class wilson_scaling (scaling.xtriage_analysis) :
       graph_columns=[[0,1,2,3]],
       data=[list(self.d_star_sq), list(self.mean_I_normalisation),
             list(self.mean_I_obs_data), list(self.mean_I_obs_theory)],
-      x_is_inverse_d_min=True)
+      x_is_inverse_d_min=True,
+      force_exact_x_labels=True)
     # collect suspicious resolution shells
     worrisome = self.z_scores > z_score_cut
     self.n_worrisome = worrisome.count(True)

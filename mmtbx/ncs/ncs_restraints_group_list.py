@@ -102,7 +102,7 @@ class NCS_restraint_group(object):
       return [self.deep_copy()]
 
     result = []
-    for chain in hierarchy.select(self.master_iselection).only_model.chains():
+    for chain in hierarchy.select(self.master_iselection).only_model().chains():
       c_iseqs = chain.atoms().extract_i_seq()
       to_keep = get_bool_selection_to_keep(
           big_selection=self.master_iselection,
@@ -415,7 +415,7 @@ class class_ncs_restraints_group_list(list):
       new_list = ncs_restraints_group_list
     return new_list
 
-  def _show(self):
+  def _show(self, hierarchy=None):
     """
     For debugging
     """
@@ -423,11 +423,15 @@ class class_ncs_restraints_group_list(list):
     for group in self:
       print "Master str selection:", group.master_str_selection
       print list(group.master_iselection)
+      if hierarchy is not None:
+        print hierarchy.select(group.master_iselection).as_pdb_string()
       for c in group.copies:
         print "Copy str selection:", c.str_selection
         print list(c.iselection)
-        print "rot", list(c.r)
-        print "tran", list(c.t)
+        # print "rot", list(c.r)
+        # print "tran", list(c.t)
+        if hierarchy is not None:
+          print hierarchy.select(c.iselection).as_pdb_string()
       print "="*30
     print "end debugging output of ncs_restraints_group_list"
 
@@ -536,28 +540,6 @@ class class_ncs_restraints_group_list(list):
         copies.append(tr)
         i += 1
       gr.copies = copies
-
-  def get_rotation_translation_as_list(self):
-    """
-    XXX
-    XXX Consider deletion. Used only in tests tst_minimization_ncs_constraints_real_space.py,
-    XXX tst_ncs_utils.py
-    XXX
-
-    Get rotations and translations vectors from ncs_restraints_group_list or
-    transforms_obj
-
-    Returns:
-      r (list): list of rotation matrices
-      t (list): list of translation vectors
-    """
-    r = []
-    t = []
-    for nrg in self:
-      for tr in nrg.copies:
-        r.append(tr.r)
-        t.append(tr.t)
-    return r,t
 
   def get_array_of_str_selections(self):
     """

@@ -148,6 +148,61 @@ class ImageSetAux(boost.python.injector, ImageSet):
     return [self.get_path(i) for i in range(len(self))]
 
 
+class ImageSetLazy(ImageSet):
+
+  '''
+  Lazy ImageSet class that doesn't necessitate setting the models ahead of time.
+  Only when a particular model (like detector or beam) for an image is requested,
+  it sets the model using the format class and then returns the model
+  '''
+
+  def get_detector(self, index=None):
+    if index is None: index=0
+    detector = super(ImageSetLazy,self).get_detector(index)
+    if detector is None:
+      format_instance = self.get_format_class()._current_instance_
+      detector = format_instance.get_detector(self.indices()[index])
+      self.set_detector(detector,index)
+    return detector
+
+
+  def get_beam(self, index=None):
+    if index is None: index=0
+    beam = super(ImageSetLazy,self).get_beam(index)
+    if beam is None:
+      format_instance = self.get_format_class()._current_instance_
+      beam = format_instance.get_beam(self.indices()[index])
+      self.set_beam(beam,index)
+    return beam
+
+  def get_goniometer(self, index=None):
+    if index is None: index=0
+    goniometer = super(ImageSetLazy,self).get_goniometer(index)
+    if goniometer is None:
+      format_instance = self.get_format_class()._current_instance_
+      goniometer = format_instance.get_goniometer(self.indices()[index])
+      self.set_goniometer(goniometer,index)
+    return goniometer
+
+  def get_scan(self, index=None):
+    if index is None: index=0
+    scan = super(ImageSetLazy,self).get_scan(index)
+    if scan is None:
+      format_instance = self.get_format_class()._current_instance_
+      scan = format_instance.get_scan(self.indices()[index])
+      self.set_scan(scan,index)
+    return scan
+
+  def __getitem__(self, item):
+    if isinstance(item, slice):
+      return ImageSetLazy(self.data(), indices = self.indices()[item])
+    else:
+      # Sets the list for detector, beam etc before being accessed by functions in imageset.h
+      self.get_detector(item)
+      self.get_beam(item)
+      self.get_goniometer(item)
+      self.get_scan(item)
+    return super(ImageSetLazy,self).__getitem__(item)
 
 class ImageSweepAux(boost.python.injector, ImageSweep):
 
@@ -329,23 +384,26 @@ class ImageSetFactory(object):
     if not check_format: assert not check_headers
 
     # Check the template is valid
-    if template.count('#') < 1:
-      raise ValueError("Invalid template")
+    if template.count('#') == 0:
+      if "master" not in template:
+        raise ValueError("Invalid template")
+      filenames = [template]
+    else:
 
-    # Get the template format
-    pfx = template.split('#')[0]
-    sfx = template.split('#')[-1]
-    template_format = '%s%%0%dd%s' % (pfx, template.count('#'), sfx)
+      # Get the template format
+      pfx = template.split('#')[0]
+      sfx = template.split('#')[-1]
+      template_format = '%s%%0%dd%s' % (pfx, template.count('#'), sfx)
 
-    # Get the template image range
-    if image_range is None:
-      image_range = template_image_range(template)
+      # Get the template image range
+      if image_range is None:
+        image_range = template_image_range(template)
 
-    # Set the image range
-    array_range = (image_range[0] - 1, image_range[1])
+      # Set the image range
+      array_range = (image_range[0] - 1, image_range[1])
 
-    # Create the sweep file list
-    filenames = [template_format % (i+1) for i in range(*array_range)]
+      # Create the sweep file list
+      filenames = [template_format % (i+1) for i in range(*array_range)]
 
     # Get the format class
     if check_format:
@@ -550,3 +608,14 @@ class ImageSetFactory(object):
 
     # Return the sweep
     return sweep
+
+  @staticmethod
+  def imageset_from_anyset(imageset):
+    ''' Create a new ImageSet object from an imageset object. Converts ImageSweep to ImageSet. '''
+    from dxtbx.imageset import ImageSet, ImageSweep, ImageSetLazy
+    if isinstance(imageset, ImageSetLazy):
+      return ImageSetLazy(imageset.data(), imageset.indices())
+    elif isinstance(imageset, ImageSweep) or isinstance(imageset, ImageSet):
+      return ImageSet(imageset.data(), imageset.indices())
+    else:
+      assert False, "Unrecognized imageset type: %s"%str(type(imageset))

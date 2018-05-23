@@ -17,15 +17,14 @@ class sdfac_propagate_parameterization(unpack_base):
     if item=="sigma_thetay" : return YY.reference[4]
     if item=="sigma_lambda" : return YY.reference[5]
     if item=="sigma_deff"   : return YY.reference[6]
-    if item=="sigma_eta"    : return YY.reference[7]
-    if item=="sigma_gstar"  : return YY.reference[8:]
+    if item=="sigma_gstar"  : return YY.reference[7:]
     if item=="sd_terms"        : return YY.reference[0:3]
     if item=="propagate_terms" : return YY.reference[3:]
     raise AttributeError(item)
 
   def show(YY, out):
     print >> out, "sdfac: %20.10f, sdb: %20.10f, sdadd: %20.10f"%(YY.SDFAC, YY.SDB, YY.SDADD)
-    for item in "sigma_thetax", "sigma_thetay", "sigma_lambda", "sigma_deff", "sigma_eta":
+    for item in "sigma_thetax", "sigma_thetay", "sigma_lambda", "sigma_deff":
       if 'theta' in item:
         print >> out, "%s: %20.10f"%(item, r2d(getattr(YY, item))),
       else:
@@ -36,8 +35,8 @@ class sdfac_propagate_parameterization(unpack_base):
     print >> out
 
 class sdfac_propagate_refinery(sdfac_refinery):
-  def __init__(self, scaler, indices, bins, log):
-    super(sdfac_propagate_refinery, self).__init__(scaler, indices, bins, log)
+  def __init__(self, scaler, modeler, indices, bins, log):
+    super(sdfac_propagate_refinery, self).__init__(scaler, modeler, indices, bins, log)
     self.propagator = sdfac_propagate(self.scaler, verbose=False)
 
     # Get derivatives from error propagation
@@ -57,21 +56,7 @@ class sdfac_propagate_refinery(sdfac_refinery):
     self.propagator.error_terms = error_terms.from_x(values.propagate_terms)
     self.propagator.adjust_errors(dI_derrorterms=self.dI_derrorterms, compute_sums=False)
 
-    # Apply SD terms
-    all_sigmas_normalized, _ = self.get_normalized_sigmas(values)
-
-    # Compute functional
-    f = flex.double()
-    for i, bin in enumerate(self.bins):
-      binned_normalized_sigmas = all_sigmas_normalized.select(bin)
-      n = len(binned_normalized_sigmas)
-      if n == 0:
-        f.append(0)
-        continue
-      # functional is weight * (1-rms(normalized_sigmas))^s summed over all intensitiy bins
-      f.append(1-math.sqrt(flex.mean(binned_normalized_sigmas*binned_normalized_sigmas)))
-
-    return f
+    return super(sdfac_propagate_refinery, self).fvec_callable(values)
 
   def jacobian_callable(self, values):
     # Restore original sigmas
@@ -103,7 +88,7 @@ class sdfac_propagate_and_refine(sdfac_refine_refltable_lbfgs):
     self.parameterization = sdfac_propagate_parameterization
 
   def run_minimzer(self, values, sels, **kwargs):
-    refinery = sdfac_propagate_refinery(self.scaler, self.scaler.miller_set.indices(), sels, self.log)
+    refinery = sdfac_propagate_refinery(self.scaler, self, self.scaler.miller_set.indices(), sels, self.log)
     return lbfgs_minimizer(values.reference, self.parameterization, refinery, self.log,
       show_finite_differences = self.scaler.params.raw_data.error_models.sdfac_refine.show_finite_differences)
 
@@ -152,10 +137,24 @@ class sdfac_propagate_and_refine(sdfac_refine_refltable_lbfgs):
       self.scaler.summed_wt_I[hkl_id] += Intensity / variance
       self.scaler.summed_weight[hkl_id] += 1 / variance
 
+    if self.scaler.params.raw_data.error_models.sdfac_refine.plot_refinement_steps:
+      from matplotlib.pyplot import cm
+      from matplotlib import pyplot as plt
+      import numpy as np
+      for i in xrange(2):
+        f = plt.figure(i)
+        lines = plt.gca().get_lines()
+        color=cm.rainbow(np.linspace(0,1,len(lines)))
+        for line, c in zip(reversed(lines), color):
+          line.set_color(c)
+      plt.ioff()
+      plt.show()
+
     if False:
       # validate using http://ccp4wiki.org/~ccp4wiki/wiki/index.php?title=Symmetry%2C_Scale%2C_Merge#Analysis_of_Standard_Deviations
       print >> self.log, "Validating"
       from matplotlib import pyplot as plt
+      from xfel.merging.algorithms.error_model import compute_normalized_deviations
       all_sigmas_normalized = compute_normalized_deviations(self.scaler.ISIGI, self.scaler.miller_set.indices())
       plt.hist(all_sigmas_normalized, bins=100)
       plt.figure()
@@ -170,3 +169,27 @@ class sdfac_propagate_and_refine(sdfac_refine_refltable_lbfgs):
 
       all_sigmas_normalized = all_sigmas_normalized.select(all_sigmas_normalized != 0)
       self.normal_probability_plot(all_sigmas_normalized, (-0.5, 0.5), plot = True)
+
+class sdfac_propagate_and_refine_levmar(sdfac_propagate_and_refine):
+  def run_minimzer(self, values, sels, **kwargs):
+    from xfel.merging.algorithms.error_model.sdfac_refine_levmar import sdfac_helper
+    from scitbx.lstbx import normal_eqns_solving
+
+    self.refinery = sdfac_propagate_refinery(self.scaler, self, self.scaler.miller_set.indices(), sels, self.log)
+    self.helper = sdfac_helper(current_x = values.reference,
+                               parameterization = self.parameterization, refinery = self.refinery,
+                               out = self.log )
+    self.iterations = normal_eqns_solving.levenberg_marquardt_iterations(
+      non_linear_ls = self.helper,
+      track_all=True,
+      gradient_threshold=1e-08,
+      step_threshold=1e-08,
+      tau=1e-08,
+      n_max_iterations=200)
+    return self
+
+  def get_refined_params(self):
+    return self.parameterization(self.helper.x)
+
+  def apply_sd_error_params(self, data, values):
+    self.refinery.apply_sd_error_params(data, values)

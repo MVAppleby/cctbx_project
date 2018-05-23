@@ -1,5 +1,7 @@
-from __future__ import absolute_import, division
-from scitbx.array_family import flex # import dependency
+from __future__ import absolute_import, division, print_function
+
+import logging
+
 try:
   import boost.python
 except Exception:
@@ -10,14 +12,12 @@ else:
 if ext is not None:
   from dxtbx_ext import *
 
-import dxtbx.imageset # implicit import
+logging.getLogger('dxtbx').addHandler(logging.NullHandler())
 
 class IncorrectFormatError(RuntimeError):
   '''
   An exception class for an incorrect format error
-
   '''
-
   def __init__(self, format_instance, filename):
     super(IncorrectFormatError, self).__init__(
       "Could not open %s as %s" % (filename, str(format_instance)))

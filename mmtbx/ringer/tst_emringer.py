@@ -1,7 +1,7 @@
 
-from __future__ import division
+from __future__ import division, print_function
 from mmtbx.ringer import em_scoring as score
-from mmtbx.command_line import emringer
+from mmtbx.programs import emringer
 from iotbx.file_reader import any_file
 from scitbx.array_family import flex
 from libtbx.test_utils import approx_equal, Exception_expected
@@ -9,6 +9,7 @@ from libtbx.utils import null_out, Sorry
 import libtbx.load_env
 import warnings
 import os.path
+from iotbx.cli_parser import run_program
 
 def exercise_emringer_residue_scan():
   pdb_file = libtbx.env.find_in_repositories(
@@ -18,7 +19,11 @@ def exercise_emringer_residue_scan():
     relative_path="phenix_regression/mmtbx/em_ringer/tst_emringer_map.ccp4",
     test=os.path.isfile)
   assert (not None in [pdb_file, map_file])
-  results, scoring, rolling = emringer.run([pdb_file, map_file], out=null_out())
+  emringer_results = run_program(program_class=emringer.Program, args=[pdb_file, map_file, 'quiet=True'])
+  results = emringer_results.ringer_result
+  scoring = emringer_results.scoring_result
+  rolling = emringer_results.rolling_result
+  #results, scoring, rolling = emringer.run([pdb_file, map_file], out=null_out())
   # Make sure the right number of residues (22 out of 28) get scanned
   assert len(results)==22
   modelled_list = [290.742121792,192.844056257,45.4781110306,294.247825632,303.618891108,58.7694040824,331.70068496,46.7136045049,290.167261226,304.261231829,282.651244586,268.729721112,195.972333785,305.321933311,314.81066224,286.028424514,311.180807466,313.004918133,296.67781565,296.949191638,169.644245088,192.496265164]
@@ -31,13 +36,19 @@ def exercise_emringer_residue_scan():
     assert approx_equal(results[i]._angles[1].peak_chi, peak_list[i])
     # Make sure the peak rhos are correct
     assert approx_equal(results[i]._angles[1].peak_rho, peak_rhos[i])
-  results, scoring2, rolling2 = emringer.run([pdb_file, map_file, "rolling_window_threshold=0.5"], out=null_out())
+
+  emringer_results2 = run_program(program_class=emringer.Program, args=[pdb_file, map_file, "rolling_window_threshold=0.5", 'quiet=True'])
+  #results, scoring2, rolling2 = emringer.run([pdb_file, map_file, "rolling_window_threshold=0.5"], out=null_out())
+  results2 = emringer_results2.ringer_result
+  scoring2 = emringer_results2.scoring_result
+  rolling2 = emringer_results2.rolling_result
   assert rolling.threshold == 0
   assert rolling2.threshold == 0.5
   #print rolling.results_a[0]
   #print rolling2.results_a[0]
   # just making sure this doesn't break!
-  results, scoring2, rolling = emringer.run([pdb_file, map_file, "sampling_angle=2"], out=null_out())
+  #results, scoring2, rolling = emringer.run([pdb_file, map_file, "sampling_angle=2"], out=null_out())
+
 
 def exercise_emringer_insertion_codes():
   """
@@ -51,7 +62,9 @@ def exercise_emringer_insertion_codes():
     relative_path="phenix_regression/mmtbx/em_ringer/tst_emringer_map.ccp4",
     test=os.path.isfile)
   assert (not None in [pdb_file, map_file])
-  results, scoring, rolling = emringer.run([pdb_file, map_file], out=null_out())
+  emringer_results = run_program(program_class=emringer.Program, args=[pdb_file, map_file, 'quiet=True'])
+
+#  results, scoring, rolling = emringer.run([pdb_file, map_file], out=null_out())
 
 # FIXME this will fail right now, which is deliberate
 def exercise_emringer_out_of_bounds():
@@ -90,7 +103,7 @@ def exercise_emringer_peakfinding(waves):
   for i in waves:
     list.append_lists(score.calculate_peaks(i,0.4))
   assert len(list) == 6
-  print list
+  print(list)
   assert [i.chi_value*5 for i in list.get_peaks()] == [305, 270, 270, 240, 310, 285]
 
 
@@ -105,8 +118,8 @@ def exercise_emringer_statistics():
   assert approx_equal(zscore, 2.570679)
 
   new_rotamer_ratio, new_zscore  = score.calc_ratio(peak_list)
-  print zscore
-  print new_zscore
+  print(zscore)
+  print(new_zscore)
   assert approx_equal(new_rotamer_ratio, rotamer_ratio)
   assert approx_equal(new_zscore,zscore)
 
@@ -115,18 +128,17 @@ if __name__=='__main__':
   try:
     import wx # special import
   except ImportError:
-    print "Required cctbx irrelevant dependencies are missing, skipping test."
+    print("Required cctbx irrelevant dependencies are missing, skipping test.")
     keep_going=False
   tstdir = libtbx.env.find_in_repositories("phenix_regression/mmtbx/em_ringer")
   if (tstdir is None) :
     warnings.warn("phenix_regression not available, skipping test")
   else :
     if(keep_going):
-      from mmtbx.command_line import emringer
       exercise_emringer_residue_scan()
       exercise_emringer_insertion_codes()
       # FIXME
       #exercise_emringer_out_of_bounds()
       #w, t = exercise_emringer_pickle_loading()
       #exercise_emringer_peakfinding(w)
-      print "OK"
+      print("OK")

@@ -466,8 +466,9 @@ def _bond_show_sorted_impl(self,
   print >> f, "%sSorted by %s:" % (prefix, by_value)
   if sorted_table is not None:
     for restraint_info in sorted_table :
-      (labels, distance_ideal, distance_model, slack, delta, sigma, weight,
-       residual, sym_op_j, rt_mx) = restraint_info
+      (i_seq,j_seq,  # Always
+        labels, distance_ideal, distance_model, slack, delta, sigma, weight,
+        residual, sym_op_j, rt_mx) = restraint_info
       s = "bond"
       for label in labels :
         print >> f, "%s%4s %s" % (prefix, s, label)
@@ -556,6 +557,7 @@ class _(boost.python.injector, shared_bond_simple_proxy):
           result += "{''} %.4f %.4f %.4f" % vec
     return result
 
+  # shared_bond_simple_proxy
   def get_sorted(self,
         by_value,
         sites_cart,
@@ -599,14 +601,15 @@ class _(boost.python.injector, shared_bond_simple_proxy):
         if (site_labels is None): l = str(i)
         else:                     l = site_labels[i]
         labels.append(l)
-      sorted_table.append(
-        (labels, restraint.distance_ideal, restraint.distance_model,
+      info = (i_seq, j_seq, labels, restraint.distance_ideal, restraint.distance_model,
          restraint.slack, restraint.delta,
          weight_as_sigma(weight=restraint.weight), restraint.weight,
-         restraint.residual(), sym_op_j, rt_mx))
+         restraint.residual(), sym_op_j, rt_mx)
+      sorted_table.append(info)
     n_not_shown = data_to_sort.size() - i_proxies_sorted.size()
     return sorted_table, n_not_shown
 
+  # shared_bond_simple_proxy
   def show_sorted(self,
                   by_value,
                   sites_cart,
@@ -679,7 +682,7 @@ class _(boost.python.injector, bond_sorted_asu_proxies):
                         by_value="delta",
                         sites_cart=sites_cart,
                         origin_id=origin_id)
-      hd = [x[2] for x in sorted_table]
+      hd = [x[4] for x in sorted_table]
       hdata = flex.double(hd)
     histogram = flex.histogram(
       data=flex.double(hdata),
@@ -742,7 +745,7 @@ class _(boost.python.injector, bond_sorted_asu_proxies):
                         by_value="delta",
                         sites_cart=sites_cart,
                         origin_id=origin_id)
-      hd = [x[4] for x in sorted_table]
+      hd = [x[6] for x in sorted_table]
       hdata = flex.double(hd)
     histogram = flex.histogram(
       data=flex.abs(hdata),
@@ -755,6 +758,7 @@ class _(boost.python.injector, bond_sorted_asu_proxies):
       low_cutoff = high_cutoff
     return histogram
 
+  # bond_sorted_asu_proxies
   def get_sorted(self,
         by_value,
         sites_cart,
@@ -813,17 +817,29 @@ class _(boost.python.injector, bond_sorted_asu_proxies):
           if (site_labels is None): l = str(i)
           else:                     l = site_labels[i]
           labels.append(l)
-        sorted_table.append(
-          (labels, restraint.distance_ideal, restraint.distance_model,
+        info=(i_seq, j_seq, labels, restraint.distance_ideal, restraint.distance_model,
            restraint.slack, restraint.delta,
            weight_as_sigma(weight=restraint.weight), restraint.weight,
-           restraint.residual(), sym_op_j, rt_mx))
+           restraint.residual(), sym_op_j, rt_mx)
+        sorted_table.append(info)
         n_outputted += 1
       else:
         n_excluded += 1
       n += 1
     n_not_shown = correct_id_proxies - n_outputted
     return sorted_table, n_not_shown
+
+  def get_outliers(self, sites_cart, sigma_threshold):
+    result = []
+    vals = self.get_sorted(by_value="delta", sites_cart=sites_cart)[0]
+    if(vals is None): return result
+    for it in vals:
+      i,j = it[0],it[1]
+      delta = abs(it[6])
+      sigma = it[7]
+      if(delta > sigma*sigma_threshold):
+        result.append([i,j])
+    return result
 
   def get_filtered_deltas(self,
       sites_cart,
@@ -860,7 +876,7 @@ class _(boost.python.injector, bond_sorted_asu_proxies):
           result.append(restraint.delta)
       return result if len(result) > 0 else None
 
-
+  # bond_sorted_asu_proxies
   def show_sorted(self,
         by_value,
         sites_cart,
@@ -871,7 +887,7 @@ class _(boost.python.injector, bond_sorted_asu_proxies):
         origin_id=None):
     if f is None: f = sys.stdout
     # print >> f, "%sBond restraints: %d" % (prefix, self.n_total())
-    _bond_show_sorted_impl(self, by_value,
+    return _bond_show_sorted_impl(self, by_value,
                           sites_cart=sites_cart,
                           site_labels=site_labels,
                           f=f,
@@ -958,8 +974,8 @@ class _(boost.python.injector, nonbonded_sorted_asu_proxies):
                  ):
     assert by_value in ["delta"]
     deltas = nonbonded_deltas(sites_cart=sites_cart, sorted_asu_proxies=self)
-    if (deltas.size() == 0): return
-    if (max_items is not None and max_items <= 0): return
+    if (deltas.size() == 0): return [], 0
+    if (max_items is not None and max_items <= 0): return [], deltas.size()
     i_proxies_sorted = flex.sort_permutation(data=deltas)
     if (max_items is not None):
       i_proxies_sorted = i_proxies_sorted[:max_items]
@@ -1049,33 +1065,21 @@ class _(boost.python.injector, nonbonded_sorted_asu_proxies):
         suppress_model_minus_vdw_greater_than=0.2,
         but_show_all_model_up_to=3.5):
     assert by_value in ["delta"]
+    sorted_table, n_not_shown = self.get_sorted(
+        by_value=by_value,
+        sites_cart=sites_cart,
+        site_labels=site_labels,
+        max_items=max_items,
+        include_proxy=False)
     if (f is None): f = sys.stdout
-    deltas = nonbonded_deltas(sites_cart=sites_cart, sorted_asu_proxies=self)
-    print >> f, "%sNonbonded interactions: %d" % (prefix, deltas.size())
-    if (deltas.size() == 0): return
-    if (max_items is not None and max_items <= 0): return
-    i_proxies_sorted = flex.sort_permutation(data=deltas)
-    if (max_items is not None):
-      i_proxies_sorted = i_proxies_sorted[:max_items]
-    if (self.asu.size() == 0):
-      asu_mappings = None
-    else:
-      asu_mappings = self.asu_mappings()
+    print >> f, "%sNonbonded interactions: %d" % (prefix, len(sorted_table)+n_not_shown)
+    if len(sorted_table) == 0: return
     print >> f, "%sSorted by model distance:" % prefix
-    n_simple = self.simple.size()
-    for i_proxy in i_proxies_sorted:
-      if (i_proxy < n_simple):
-        proxy = self.simple[i_proxy]
-        i_seq,j_seq = proxy.i_seqs
-        rt_mx = None
-        sym_op_j = ""
-      else:
-        proxy = self.asu[i_proxy-n_simple]
-        i_seq,j_seq = proxy.i_seq,proxy.j_seq
-        rt_mx = asu_mappings.get_rt_mx_ji(pair=proxy)
-        sym_op_j = " sym.op."
+
+    for info in sorted_table:
+      labels, i_seq, j_seq, delta, vdw_distance, sym_op_j, rt_mx = info
       def suppress():
-        m, v = deltas[i_proxy], proxy.vdw_distance
+        m, v = delta, vdw_distance
         if (suppress_model_minus_vdw_greater_than is None): return False
         if (m-v <= suppress_model_minus_vdw_greater_than): return False
         if (but_show_all_model_up_to is None): return True
@@ -1083,18 +1087,14 @@ class _(boost.python.injector, nonbonded_sorted_asu_proxies):
         return True
       if (suppress()): continue
       s = "nonbonded"
-      for i in [i_seq, j_seq]:
-        if (site_labels is None): l = str(i)
-        else:                     l = site_labels[i]
+      for l in labels:
         print >> f, "%s%9s %s" % (prefix, s, l)
         s = ""
       print >> f, "%s   model   vdw%s" % (prefix, sym_op_j)
-      print >> f, "%s  %6.3f %5.3f" % (
-        prefix, deltas[i_proxy], proxy.vdw_distance),
+      print >> f, "%s  %6.3f %5.3f" % (prefix, delta, vdw_distance),
       if (rt_mx is not None):
         print >> f, rt_mx,
       print >> f
-    n_not_shown = deltas.size() - i_proxies_sorted.size()
     if (n_not_shown != 0):
       print >> f, prefix + "... (remaining %d not shown)" % n_not_shown
 
@@ -1216,7 +1216,17 @@ class _(boost.python.injector, shared_angle_proxy):
         site_labels=site_labels, max_items=max_items,
         get_restraints_only=False, origin_id=origin_id)
 
-
+  def get_outliers(self, sites_cart, sigma_threshold):
+    result = []
+    vals = self.get_sorted(by_value="delta", sites_cart=sites_cart)[0]
+    if(vals is None): return result
+    for it in vals:
+      i,j,k = [int(i) for i in it[0]]
+      delta = abs(it[3])
+      sigma = it[4]
+      if(delta > sigma*sigma_threshold):
+        result.append([i,j,k])
+    return result
 
 class _(boost.python.injector, dihedral):
   def _show_sorted_item(O, f, prefix):
@@ -1291,6 +1301,18 @@ class _(boost.python.injector, shared_dihedral_proxy):
         by_value=by_value, unit_cell=unit_cell, sites_cart=sites_cart,
         site_labels=site_labels, max_items=max_items,
         get_restraints_only=False)
+
+  def get_outliers(self, sites_cart, sigma_threshold):
+    result = []
+    vals = self.get_sorted(by_value="delta", sites_cart=sites_cart)[0]
+    if(vals is None): return result
+    for it in vals:
+      ind = [int(i) for i in it[0]]
+      delta = abs(it[3])
+      sigma = it[5]
+      if(delta > sigma*sigma_threshold):
+        result.append(ind)
+    return result
 
 class _(boost.python.injector, chirality):
 

@@ -1,5 +1,4 @@
-from __future__ import division
-from __future__ import print_function
+from __future__ import absolute_import, division, print_function
 import libtbx.path
 from libtbx.auto_build import regenerate_module_files
 from libtbx.path import relocatable_path, absolute_path
@@ -12,9 +11,11 @@ try:
   import cPickle as pickle
 except ImportError:
   import pickle
-from cStringIO import StringIO
+import os
 import re
-import site, sys, os
+import site
+import sys
+import sysconfig
 op = os.path
 
 if os.environ.get('LIBTBX_WINGIDE_DEBUG'):
@@ -153,15 +154,27 @@ def get_mipspro_version():
   raise RuntimeError(
     "\n  ".join(["Unknown MIPSpro compiler (CC -version):"] + run_out))
 
-def python_include_path(must_exist=True):
+def python_include_path():
   if (sys.platform == "win32"):
     include_path = sys.prefix + r"\include"
   else:
     include_path = sys.prefix + "/include/python%d.%d" % sys.version_info[:2]
   include_path = libtbx.path.norm_join(include_path)
-  if (must_exist and not op.isdir(include_path)):
-    raise RuntimeError("Cannot locate Python's include directory: %s"
-      % include_path)
+
+  # I believe the above code to be unnecessary.
+  # If this flags up no problems then remove the code above and
+  # the assertion test directly below in a month or so.
+  if op.isdir(include_path):
+    sysconfig_path = sysconfig.get_paths()['include']
+    if sys.platform == "win32":
+      include_path = include_path.lower()
+      sysconfig_path = sysconfig_path.lower()
+    assert include_path == sysconfig_path, \
+        "%s != %s" % (include_path, sysconfig_path)
+
+  include_path = sysconfig.get_paths()['include']
+  if not op.isdir(include_path):
+    raise RuntimeError("Cannot locate Python's include directory: %s" % include_path)
   return include_path
 
 def ld_library_path_var_name():
@@ -238,7 +251,7 @@ class common_setpaths(object):
       self.u = open_info(env.under_build("unsetpaths.%s" % shell,
                                          return_relocatable_path=True))
     else:
-      self.u = StringIO() # /dev/null equivalent
+      self.u = open(os.devnull, 'w')
 
   def all_and_debug(self):
     if (self.suffix == "_debug"):
@@ -937,6 +950,23 @@ Wait for the command to finish, then try again.""" % vars())
     except ImportError:
       pass
 
+    # set OPENBLAS_NUM_THREADS
+    # This prevents the binary pip installation of numpy from spawning threads
+    # when flex is imported ("from scitbx.array_family import flex")
+    # Problem seems to only appear on linux, but should not hurt other operating
+    # systems.
+    # According to https://github.com/xianyi/OpenBLAS#usage , there are 3
+    # environment variables that control the spawning of threads
+    #   OPENBLAS_NUM_THREADS
+    #   GOTO_NUM_THREADS
+    #   OMP_NUM_THREADS
+    # where OPENBLAS_NUM_THREADS > GOTO_NUM_THREADS > OMP_NUM_THREADS in terms
+    # of precedence. Setting OPENBLAS_NUM_THREADS should allow OMP_NUM_THREADS
+    # to be used for OpenMP sections. Using multiple threads for numpy functions
+    # that depend on OpenBLAS will require changing the OPENBLAS_NUM_THREADS
+    # environment variable in the code that wants that functionality.
+    openblas_num_threads = 1
+
     # determine LC_ALL from environment (Python UTF-8 compatibility in Linux)
     LC_ALL = os.environ.get('LC_ALL')     # user setting
     if (LC_ALL is not None):
@@ -993,6 +1023,11 @@ Wait for the command to finish, then try again.""" % vars())
       print('export LIBTBX_DISPATCHER_NAME', file=f)
       if source_file.ext().lower() == ".py":
         source_is_py = True
+      else:
+        with open(abs(source_file), 'rb') as fh:
+          first_line = fh.readline()
+        if first_line.startswith(b'#!') and b'python' in first_line.lower():
+          source_is_py = True
     for line in self.dispatcher_include(where="at_start"):
       print(line, file=f)
     essentials = [("PYTHONPATH", self.pythonpath)]
@@ -1004,6 +1039,9 @@ Wait for the command to finish, then try again.""" % vars())
     if (cert_file is not None):
       print('SSL_CERT_FILE="%s"' % cert_file.sh_value(), file=f)
       print('export SSL_CERT_FILE', file=f)
+
+    print('OPENBLAS_NUM_THREADS="%s"' % openblas_num_threads, file=f)
+    print('export OPENBLAS_NUM_THREADS', file=f)
 
     pangorc = abs(self.build_path / '..' / 'base' / 'etc' / 'pango' / 'pangorc')
     if os.path.exists(pangorc):
@@ -1100,6 +1138,8 @@ Wait for the command to finish, then try again.""" % vars())
       cmd = ""
       if (source_is_py or source_is_python_exe):
         qnew_tmp = qnew
+        if self.python_version_major_minor[0] == 3:
+          qnew_tmp = '' # -Q is gone in Python3.
         if self.build_options.python3warn == 'warn':
           qnew_tmp += " -3"
         elif self.build_options.python3warn == 'fail':
@@ -1522,6 +1562,31 @@ selfx:
           source_file=source_file,
           target_file=module_name+"."+command)
 
+  def generate_entry_point_dispatchers(self):
+    # Write indirect dispatcher scripts for all console_scripts entry points
+    # that have existing dispatcher scripts in the base/bin directory, but
+    # add a 'libtbx.' prefix.
+    base_bin_directory = libtbx.env.under_base('bin')
+    if not os.path.isdir(base_bin_directory):
+      return # do not create console_scripts dispatchers, only point to them
+
+    base_bin_dispatchers = set(os.listdir(base_bin_directory))
+    existing_dispatchers = filter(lambda f: f.startswith('libtbx.'), self.bin_path.listdir())
+    existing_dispatchers = set(map(lambda f: f[7:], existing_dispatchers))
+    entry_point_candidates = base_bin_dispatchers - existing_dispatchers
+
+    try:
+      import pkg_resources
+    except ImportError:
+      return
+    entry_points = pkg_resources.iter_entry_points('console_scripts')
+    entry_points = filter(lambda ep: ep.name in entry_point_candidates, entry_points)
+    for ep in entry_points:
+      self.write_dispatcher(
+          source_file=libtbx.env.under_base(os.path.join('bin', ep.name)),
+          target_file=os.path.join('bin', 'libtbx.' + ep.name),
+      )
+
   def write_command_version_duplicates(self):
     if (self.command_version_suffix is None): return
     suffix = "_" + self.command_version_suffix
@@ -1627,6 +1692,7 @@ selfx:
     for module in self.module_list:
       module.process_libtbx_refresh_py()
     self.write_python_and_show_path_duplicates()
+    self.generate_entry_point_dispatchers()
     self.process_exe()
     self.write_command_version_duplicates()
     if (os.name != "nt"):     # LD_LIBRARY_PATH for dependencies
@@ -1801,6 +1867,7 @@ class module:
     if (file_name_lower.endswith(".pyo")): return
     if (file_name.startswith(".")): return
     if (file_name.endswith("~")): return # ignore emacs backup files
+    if (file_name_lower.endswith(".md")): return # ignore markdown files
     if (file_name == "ipython_shell_start.py" and self.name == "libtbx"):
       try: import IPython
       except ImportError: return
@@ -1890,29 +1957,17 @@ class module:
           suppress_warning=False,
           scan_for_libtbx_set_dispatcher_name=True)
 
-  def process_python_command_line_scripts(self,
-        source_dir,
-        print_prefix="  ",
-        target_file_name_infix="",
-        scan_for_libtbx_set_dispatcher_name=False):
-    source_dir = self.env.as_relocatable_path(source_dir)
-    print(print_prefix+"Processing: %s" % show_string(abs(source_dir)))
-    for file_name in source_dir.listdir():
-      if (not file_name.endswith(".py")): continue
-      self.write_dispatcher(
-        source_dir=source_dir,
-        file_name=file_name,
-        suppress_warning=False,
-        target_file_name_infix=target_file_name_infix,
-        scan_for_libtbx_set_dispatcher_name
-          =scan_for_libtbx_set_dispatcher_name)
-
   def process_libtbx_refresh_py(self):
     for dist_path in self.dist_paths_active():
       custom_refresh = dist_path / "libtbx_refresh.py"
       if custom_refresh.isfile():
         print("Processing: %s" % show_string(abs(custom_refresh)))
-        execfile(abs(custom_refresh), {}, {"self": self})
+        with open(abs(custom_refresh)) as fh:
+          exec(
+              fh.read(),
+              {"__name__": dist_path.basename() + ".libtbx_refresh"},
+              {"self": self},
+          )
 
   def collect_test_scripts(self,
         file_names=["run_tests.py", "run_examples.py"]):

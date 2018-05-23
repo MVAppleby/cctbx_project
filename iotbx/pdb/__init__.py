@@ -19,6 +19,7 @@ from libtbx.utils import plural_s, hashlib_md5, date_and_time, Sorry
 from libtbx import Auto
 from cStringIO import StringIO
 import sys
+import calendar
 import os
 op = os.path
 
@@ -552,6 +553,8 @@ class residue_name_plus_atom_names_interpreter(object):
     self.work_residue_name = work_residue_name
     self.atom_name_interpretation = atom_name_interpretation
 
+#
+# check out merge_files_and_check_for_overlap
 class combine_unique_pdb_files(object):
 
   def __init__(self, file_names):
@@ -664,7 +667,7 @@ class pdb_input_from_any(object):
     content = None
     from iotbx.pdb.mmcif import cif_input
     mmcif_exts = ('.cif', '.mmcif')
-    if file_name is not None and file_name.endswith(mmcif_exts):
+    if file_name is not None and file_name.strip(".gz").endswith(mmcif_exts):
       file_inputs = (cif_input, pdb_input)
     else:
       file_inputs = (pdb_input, cif_input)
@@ -688,6 +691,10 @@ class pdb_input_from_any(object):
         #   pdb_input only raises an error if there are lines starting with
         #   "ATOM  " or "HETATM" and it subsequently fails to interpret these
         #   lines as ATOM/HETATM records
+        #
+        # XXX This hack fails to recognize /net/cci/pdb_mirror/mmcif/of/2of6.cif.gz
+        # Reason: atom coordinates luckily can be parsed (no letters there)
+        #
         n_unknown_records = content.unknown_section().size()
         n_records = sum(content.record_type_counts().values())
         n_blank_records = content.record_type_counts().get('      ', 0)
@@ -793,15 +800,29 @@ input_sections = (
 
 class pdb_input_mixin(object):
 
-  def deposition_date(self):
+  def deposition_date(self, us_style=True):
     """
     Placeholder to match mmCIF functionality. Probably could parse
     REVDAT.
     """
-    return None
+    result = None
+    for line in self.title_section():
+      if(line.startswith("HEADER ")):
+        date = header_date(field=line[50:59])
+        if(date.is_fully_defined()):
+          dd = str(date.dd).strip()
+          if(len(dd)==1): dd = "0"+dd
+          result = "%s-%s-%s"%(dd, str(date.mmm), str(date.yyyy))
+          if(us_style):
+            months = dict((v.upper(),k) for k,v in enumerate(calendar.month_abbr))
+            m=str(months[str(date.mmm).upper()])
+            if(len(m)==1): m = "0"+m
+            result = "%s-%s-%s"%(str(date.yyyy), m, dd)
+    return result
 
   # MARKED_FOR_DELETION_OLEG
-  # REASON: moved to mmtbx.model.manager
+  # REASON: moved to mmtbx.model.manager. Only used in
+  # mmtbx/regression/ncs/tst_minimization_ncs_constraints.py
   def _expand_hierarchy_helper(self,
       mtrix_biomt_container,
       h=None,
@@ -826,21 +847,6 @@ class pdb_input_mixin(object):
     return self._expand_hierarchy_helper(
       mtrix_biomt_container = self.process_BIOMT_records(),
       sort_atoms = sort_atoms)
-
-  def construct_ss_annotation_expanded(self, exp_type='mtrix'):
-    exp_container = None
-    if exp_type == 'mtrix':
-      exp_container = self.process_MTRIX_records()
-    elif exp_type == 'biomt':
-      exp_container = self.process_BIOMT_records()
-    ss_ann = self.extract_secondary_structure()
-    present = exp_container.validate()
-    if (exp_container is not None and ss_ann is not None and
-        not exp_container.is_empty() and
-        not len(exp_container.r)==0 and
-        not present):
-      ss_ann.multiply_to_asu(n_copies=len(exp_container.r)-1)
-    return ss_ann
   # END_MARKED_FOR_DELETION_OLEG
 
 
@@ -1161,9 +1167,7 @@ class _(boost.python.injector, ext.input, pdb_input_mixin):
   def extract_secondary_structure (self, log=None) :
     from iotbx.pdb import secondary_structure
     records = self.secondary_structure_section()
-    if records.size() != 0 :
-      return secondary_structure.annotation.from_records(records, log)
-    return None
+    return secondary_structure.annotation.from_records(records, log)
 
   def extract_LINK_records(self):
     '''
@@ -1254,6 +1258,13 @@ class _(boost.python.injector, ext.input, pdb_input_mixin):
     remark_2_and_3_records.extend(self.extract_remark_iii_records(3))
     return extract_rfactors_resolutions_sigma.get_r_rfree_sigma(
       remark_2_and_3_records, file_name)
+
+  def resolution(self):
+    return self.get_r_rfree_sigma().resolution
+
+  def experiment_type_electron_microscopy(self):
+    et = self.get_experiment_type().strip().upper()
+    return et == "ELECTRON MICROSCOPY"
 
   def get_program_name(self):
     remark_3_lines = self.extract_remark_iii_records(3)
@@ -1885,52 +1896,3 @@ def show_file_summary (pdb_in, hierarchy=None, out=None) :
   for label, value in info :
     print >> out, format % (label + ":", str(value))
   return info
-
-# MARKED_FOR_DELETION_OLEG
-# Reason: functionality lives in mmtbx/model.py:class model:model_as_pdb()
-def write_whole_pdb_file(
-    file_name=None,
-    output_file=None,
-    processed_pdb_file=None,
-    pdb_hierarchy=None,
-    crystal_symmetry=None,
-    ss_annotation=None,
-    append_end=True,
-    atoms_reset_serial_first_value=None,
-    link_records=None,
-    ):
-  assert [file_name, output_file].count(None) == 1
-  assert [processed_pdb_file, ss_annotation].count(None) >= 1
-  out = output_file
-  if file_name is not None:
-    out = open(file_name, "w")
-  # outputting HELIX/SHEET records
-  ss_records = ""
-  if processed_pdb_file is not None:
-    if processed_pdb_file.ss_manager is not None:
-      ss_ann = processed_pdb_file.ss_manager.actual_sec_str
-      ss_records = ss_ann.as_pdb_str()
-    else:
-      if hasattr(processed_pdb_file.all_chain_proxies.pdb_inp,
-          'secondary_structure_section'):
-        ss_section = processed_pdb_file.all_chain_proxies.\
-            pdb_inp.secondary_structure_section()
-        if len(ss_section) > 0:
-          ss_records = "\n".join(ss_section)
-  if ss_annotation is not None:
-    ss_records = ss_annotation.as_pdb_str()
-  if ss_records != "":
-    if ss_records[-1] != "\n":
-      ss_records += "\n"
-    out.write(ss_records)
-  if link_records is not None and len(link_records)>0:
-    out.write("%s\n" % link_records)
-  if pdb_hierarchy is not None:
-    out.write(pdb_hierarchy.as_pdb_string(
-        crystal_symmetry=crystal_symmetry,
-        atoms_reset_serial_first_value=atoms_reset_serial_first_value,
-        append_end=append_end))
-  if file_name is not None:
-    out.flush()
-    out.close()
-# END_MARKED_FOR_DELETION_OLEG

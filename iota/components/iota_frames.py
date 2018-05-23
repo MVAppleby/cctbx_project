@@ -3,7 +3,7 @@ from __future__ import division
 '''
 Author      : Lyubimov, A.Y.
 Created     : 01/17/2017
-Last Changed: 01/25/2018
+Last Changed: 05/11/2018
 Description : IOTA GUI Windows / frames
 '''
 
@@ -11,10 +11,9 @@ import os
 import wx
 from wxtbx import bitmaps
 import wx.lib.buttons as btn
-from wx.lib.scrolledpanel import ScrolledPanel
 from wx import richtext as rt
+from wx.lib.scrolledpanel import ScrolledPanel
 
-import math
 import numpy as np
 import time
 import warnings
@@ -22,15 +21,20 @@ import multiprocessing
 
 import matplotlib.gridspec as gridspec
 from matplotlib import pyplot as plt
+from matplotlib import colorbar, colors
 from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as FigureCanvas
 from matplotlib.figure import Figure
 import matplotlib.patches as mpatches
+import matplotlib.path as path
+from mpl_toolkits.mplot3d import Axes3D
+
+assert Axes3D
 
 from libtbx import easy_run
 from libtbx import easy_pickle as ep
 from libtbx.utils import to_unicode
-from cctbx import miller
-assert miller
+from cctbx import miller, crystal
+from cctbx.array_family import flex
 
 from iota.components.iota_utils import InputFinder
 from iota.components.iota_analysis import Analyzer, Plotter
@@ -85,6 +89,7 @@ class InputWindow(BasePanel):
     self.input_phil = phil
     self.target_phil = None
     self.gparams = self.input_phil.extract()
+    self.imageset = None
 
     if str(self.gparams.advanced.integrate_with).lower() == 'cctbx':
       target = self.gparams.cctbx.target
@@ -199,6 +204,7 @@ class FileListCtrl(ct.CustomListCtrl):
     self.all_data_images = {}
     self.all_img_objects = {}
     self.all_proc_pickles = {}
+    self.image_count = 0
 
     # Generate columns
     self.ctr.InsertColumn(0, "")
@@ -208,13 +214,18 @@ class FileListCtrl(ct.CustomListCtrl):
     self.ctr.setResizeColumn(2)
 
     # Add file / folder buttons
-    self.button_sizer = wx.BoxSizer(wx.HORIZONTAL)
+    # self.button_sizer = wx.BoxSizer(wx.HORIZONTAL)
+    self.button_sizer = wx.FlexGridSizer(1, 3, 0, 10)
     self.btn_add_file = wx.Button(self, label='Add File...')
     self.btn_add_dir = wx.Button(self, label='Add Folder...')
+    self.txt_total_images = wx.StaticText(self, label='')
     self.button_sizer.Add(self.btn_add_file)
-    self.button_sizer.Add(self.btn_add_dir, flag=wx.LEFT, border=10)
+    self.button_sizer.Add(self.btn_add_dir)
+    self.button_sizer.Add(self.txt_total_images)
+    self.button_sizer.AddGrowableCol(1)
 
-    self.sizer.Add(self.button_sizer, flag=wx.TOP | wx.BOTTOM, border=10)
+    self.sizer.Add(self.button_sizer, flag=wx.EXPAND | wx.TOP | wx.BOTTOM,
+                   border=10)
 
     # Event bindings
     self.Bind(wx.EVT_BUTTON, self.onAddFile, self.btn_add_file)
@@ -249,6 +260,7 @@ class FileListCtrl(ct.CustomListCtrl):
     type_choices = ['[  SELECT INPUT TYPE  ]']
     preferred_selection = 0
     inputs, input_type = ginp.get_input(path)
+
     if os.path.isdir(path):
       type_choices.extend(['raw image folder', 'image pickle folder'])
       if input_type in type_choices:
@@ -293,7 +305,7 @@ class FileListCtrl(ct.CustomListCtrl):
                                              'raw image list',
                                              'image pickle list']:
       self.main_window.toolbar.EnableTool(self.main_window.tb_btn_run.GetId(), True)
-      self.all_data_images[item.path] = [inputs]
+      self.all_data_images[item.path] = inputs
 
       # Calculate # of images and display w/ item
       self.ctr.SetStringItem(idx, 0, str(len(inputs)))
@@ -325,6 +337,11 @@ class FileListCtrl(ct.CustomListCtrl):
 
     # Attach data object to item
     self.ctr.SetItemData(item.id, item)
+
+    if len(inputs) > 0:
+      self.image_count += len(inputs)
+      if self.image_count > 0:
+        self.update_total_image_count()
 
     self.main_window.Layout()
 
@@ -389,9 +406,9 @@ class FileListCtrl(ct.CustomListCtrl):
           filenames = []
           for n in img_no_string:
             if '-' in n:
-              img_limits = n.split('-')
-              start = int(min(img_limits))
-              end = int(max(img_limits))
+              img_limits = [int(i) for i in n.split('-')]
+              start = min(img_limits)
+              end = max(img_limits)
               if start <= len(img_list) and end <= len(img_list):
                 filenames.extend(img_list[start:end])
             else:
@@ -424,6 +441,9 @@ class FileListCtrl(ct.CustomListCtrl):
       self.delete_button(index=0)
 
   def delete_button(self, index):
+    self.image_count -= int(self.ctr.GetItemText(index))
+    self.all_data_images.pop(self.ctr.GetItemData(index).path, None)
+    self.update_total_image_count()
     self.ctr.DeleteItem(index)
 
     # Refresh widget and list item indices
@@ -449,6 +469,9 @@ class FileListCtrl(ct.CustomListCtrl):
     else:
       wx.MessageBox(item_obj.info[item_type], 'Info', wx.OK |
                     wx.ICON_INFORMATION)
+
+  def update_total_image_count(self):
+    self.txt_total_images.SetLabel("{} total images".format(self.image_count))
 
 # ----------------------------  Processing Window ---------------------------  #
 
@@ -551,21 +574,26 @@ class LogTab(wx.Panel):
       self.log_window.ShowPosition(found_pos)
 
 
-class ProcessingTab(wx.Panel):
+class ProcessingTab(ScrolledPanel):
   def __init__(self, parent):
     self.gparams = None
     self.init = None
     self.parent = parent
 
-    self.finished_objects = None
-    self.img_list = None
-    self.nref_list = None
-    self.res_list = None
+    self.finished_objects = []
+    self.img_list = []
+    self.nref_list = []
+    self.res_list = []
+    self.indices = []
+    self.spacegroup = None
+    self.idx_array = None
+
+    self.hkl_view_axis = 'l'
     self.pick = {'image':None, 'index':0, 'axis':None, 'picked':False}
     self.proc_fnames = None
 
-    wx.Panel.__init__(self, parent)
-    self.main_fig_sizer = wx.BoxSizer(wx.VERTICAL)
+    ScrolledPanel.__init__(self, parent)
+    self.main_fig_sizer = wx.GridBagSizer(0, 0)
 
     # Set regular font
     plt.rc('font', family='sans-serif', size=plot_font_size)
@@ -575,7 +603,7 @@ class ProcessingTab(wx.Panel):
     self.int_panel = wx.Panel(self)
     int_sizer = wx.BoxSizer(wx.VERTICAL)
     self.int_panel.SetSizer(int_sizer)
-    self.int_figure = Figure()
+    self.int_figure = Figure(figsize=(1, 2.5))
     self.int_figure.patch.set_visible(False)    # create transparent background
 
     # Image info sizer
@@ -607,81 +635,99 @@ class ProcessingTab(wx.Panel):
     self.Bind(wx.EVT_BUTTON, self.onArrow, self.btn_left)
 
     # Charts
-    int_gsp = gridspec.GridSpec(4, 5)
-    int_gsub = gridspec.GridSpecFromSubplotSpec(2, 1,
-                                                subplot_spec=int_gsp[:2, :],
-                                                hspace=0)
+    int_gsp = gridspec.GridSpec(2, 1, wspace=0, hspace=0)
 
     # Resolution / No. strong reflections chart
-    self.res_axes = self.int_figure.add_subplot(int_gsub[0])
+    self.res_axes = self.int_figure.add_subplot(int_gsp[0])
     self.res_axes.set_ylabel('Resolution')
     self.res_axes.yaxis.get_major_ticks()[0].label1.set_visible(False)
     self.res_axes.yaxis.get_major_ticks()[-1].label1.set_visible(False)
     plt.setp(self.res_axes.get_xticklabels(), visible=False)
-    self.nsref_axes = self.int_figure.add_subplot(int_gsub[1])
+    self.nsref_axes = self.int_figure.add_subplot(int_gsp[1])
     self.nsref_axes.set_xlabel('Frame')
     self.nsref_axes.set_ylabel('Strong Spots')
     self.nsref_axes.yaxis.get_major_ticks()[0].label1.set_visible(False)
     self.nsref_axes.yaxis.get_major_ticks()[-1].label1.set_visible(False)
 
-    # Determine size of plot labels and introduce sufficient spacer into
-    # info textbox sizer
-    # TODO: This needs to be better
-    ax_width = self.nsref_axes.get_window_extent().width
-    fig_width = self.int_figure.get_window_extent().width
-    spacer = fig_width - ax_width
-    self.info_sizer.Add((spacer * 0.45, -1), pos=(0, 0))
-    self.info_sizer.Add((spacer * 0.1, -1), pos=(0, 5))
     self.info_txt.Show()
     self.btn_right.Show()
     self.btn_left.Show()
     self.btn_viewer.Show()
 
+    self.int_figure.set_tight_layout(True)
+    self.int_canvas = FigureCanvas(self.int_panel, -1, self.int_figure)
+    int_sizer.Add(self.int_canvas, 1, flag=wx.EXPAND)
+
     # UC Histogram / cluster figure
-    uc_gsub = gridspec.GridSpecFromSubplotSpec(2, 3,
-                                               subplot_spec=int_gsp[2:4, :3],
-                                               hspace=0, wspace=0)
-    self.a_axes = self.int_figure.add_subplot(uc_gsub[0])
+    self.uc_panel = wx.Panel(self)
+    uc_sizer = wx.BoxSizer(wx.VERTICAL)
+    self.uc_panel.SetSizer(uc_sizer)
+    self.uc_figure = Figure(figsize=(1, 2.5))
+    self.uc_figure.patch.set_visible(False)    # create transparent background
+
+    uc_gsub = gridspec.GridSpec(2, 3, wspace=0, hspace=0)
+    self.a_axes = self.uc_figure.add_subplot(uc_gsub[0])
     self.a_axes.xaxis.get_major_ticks()[0].label1.set_visible(False)
     self.a_axes.xaxis.get_major_ticks()[-1].label1.set_visible(False)
-    self.b_axes = self.int_figure.add_subplot(uc_gsub[1], sharey=self.a_axes)
+    self.b_axes = self.uc_figure.add_subplot(uc_gsub[1], sharey=self.a_axes)
     self.b_axes.xaxis.get_major_ticks()[0].label1.set_visible(False)
     self.b_axes.xaxis.get_major_ticks()[-1].label1.set_visible(False)
     plt.setp(self.b_axes.get_yticklabels(), visible=False)
-    self.c_axes = self.int_figure.add_subplot(uc_gsub[2], sharey=self.a_axes)
+    self.c_axes = self.uc_figure.add_subplot(uc_gsub[2], sharey=self.a_axes)
     self.c_axes.xaxis.get_major_ticks()[0].label1.set_visible(False)
     self.c_axes.xaxis.get_major_ticks()[-1].label1.set_visible(False)
     plt.setp(self.c_axes.get_yticklabels(), visible=False)
-    self.alpha_axes = self.int_figure.add_subplot(uc_gsub[3])
+    self.alpha_axes = self.uc_figure.add_subplot(uc_gsub[3])
     self.alpha_axes.xaxis.get_major_ticks()[0].label1.set_visible(False)
     self.alpha_axes.xaxis.get_major_ticks()[-1].label1.set_visible(False)
-    self.beta_axes = self.int_figure.add_subplot(uc_gsub[4],
+    self.beta_axes = self.uc_figure.add_subplot(uc_gsub[4],
                                                  sharey=self.alpha_axes)
     self.beta_axes.xaxis.get_major_ticks()[0].label1.set_visible(False)
     self.beta_axes.xaxis.get_major_ticks()[-1].label1.set_visible(False)
     plt.setp(self.beta_axes.get_yticklabels(), visible=False)
-    self.gamma_axes = self.int_figure.add_subplot(uc_gsub[5],
+    self.gamma_axes = self.uc_figure.add_subplot(uc_gsub[5],
                                                   sharey=self.alpha_axes)
     self.gamma_axes.xaxis.get_major_ticks()[0].label1.set_visible(False)
     self.gamma_axes.xaxis.get_major_ticks()[-1].label1.set_visible(False)
     plt.setp(self.gamma_axes.get_yticklabels(), visible=False)
 
-    # BeamXY chart (TODO: FIND SOMETHING BETTER TO PLOT HERE)
-    self.bxy_axes = self.int_figure.add_subplot(int_gsp[2:4, 3:5])
-    self.bxy_axes.set_xlabel('BeamX (mm)')
-    self.bxy_axes.set_ylabel('BeamY (mm)')
-    self.bxy_axes.set_aspect('equal', 'datalim')
+    self.uc_figure.set_tight_layout(True)
+    self.uc_canvas = FigureCanvas(self.uc_panel, -1, self.uc_figure)
+    uc_sizer.Add(self.uc_canvas, 1, flag=wx.EXPAND)
 
-    self.int_figure.set_tight_layout(True)
-    self.int_canvas = FigureCanvas(self.int_panel, -1, self.int_figure)
-    int_sizer.Add(self.int_canvas, 1, flag=wx.EXPAND)
+    # HKL (or slice) plot
+    self.hkl_panel = wx.Panel(self)
+    hkl_sizer = wx.BoxSizer(wx.VERTICAL)
+    self.hkl_panel.SetSizer(hkl_sizer)
+    self.hkl_figure = Figure(figsize=(0.25, 0.25))
+    self.hkl_figure.patch.set_visible(False)    # create transparent background
+
+    self.hkl_axes = self.hkl_figure.add_subplot(111, frameon=False)
+    # self.hkl_axes.set_aspect('equal')
+    self.hkl_axes.set_xticks([])
+    self.hkl_axes.set_yticks([])
+
+    self.hkl_figure.set_tight_layout(True)
+    self.hkl_canvas = FigureCanvas(self.hkl_panel, -1, self.hkl_figure)
+    hkl_sizer.Add(self.hkl_canvas, 1, flag=wx.EXPAND)
+
+    self.hkl_sg = ct.OptionCtrl(self.hkl_panel,
+                                items=[('sg', 'P1')],
+                                checkbox=True,
+                                checkbox_state=False,
+                                checkbox_label='Space Group: ',
+                                label_size=wx.DefaultSize,
+                                ctrl_size=wx.DefaultSize)
+    hkl_sizer.Add(self.hkl_sg, flag=wx.ALL | wx.ALIGN_CENTER, border=5)
+    self.Bind(wx.EVT_TEXT_ENTER, self.onSGTextEnter, self.hkl_sg.sg)
+    self.Bind(wx.EVT_CHECKBOX, self.onSGCheckbox, self.hkl_sg.toggle)
 
     # Processing summary figure
     self.proc_panel = wx.Panel(self, size=(-1, 120))
     proc_sizer = wx.BoxSizer(wx.VERTICAL)
     self.proc_panel.SetSizer(proc_sizer)
 
-    self.proc_figure = Figure()
+    self.proc_figure = Figure(figsize=(0.5, 2.5))
     self.proc_figure.patch.set_visible(False)
     self.sum_axes = self.proc_figure.add_subplot(111)
     self.sum_axes.axis('off')
@@ -689,20 +735,50 @@ class ProcessingTab(wx.Panel):
     self.proc_canvas = FigureCanvas(self.proc_panel, -1, self.proc_figure)
     proc_sizer.Add(self.proc_canvas, flag=wx.EXPAND | wx.BOTTOM, border=10)
 
-    self.main_fig_sizer.Add(self.int_panel, 1, flag=wx.EXPAND)
-    self.main_fig_sizer.Add(self.proc_panel, flag=wx.EXPAND)
+    self.main_fig_sizer.Add(self.int_panel, pos=(0, 0), span=(2, 6),
+                            flag=wx.EXPAND)
+    self.main_fig_sizer.Add(self.uc_panel, pos=(2, 0), span=(2, 4),
+                            flag=wx.EXPAND)
+    self.main_fig_sizer.Add(self.hkl_panel, pos=(2, 4), span=(2, 2),
+                            flag=wx.EXPAND)
+    self.main_fig_sizer.Add(self.proc_panel, pos= (4, 0), span=(1, 6),
+                            flag=wx.EXPAND)
+
+    self.main_fig_sizer.AddGrowableCol(0)
+    self.main_fig_sizer.AddGrowableCol(1)
+    self.main_fig_sizer.AddGrowableCol(2)
+    self.main_fig_sizer.AddGrowableCol(3)
+    self.main_fig_sizer.AddGrowableCol(4)
+    self.main_fig_sizer.AddGrowableCol(5)
+    self.main_fig_sizer.AddGrowableRow(1)
+    self.main_fig_sizer.AddGrowableRow(3)
 
     cid = self.int_canvas.mpl_connect('pick_event', self.on_pick)
     sid = self.proc_canvas.mpl_connect('pick_event', self.on_bar_pick)
     xid = self.int_canvas.mpl_connect('button_press_event', self.on_button_press)
+    xid = self.hkl_canvas.mpl_connect('button_press_event', self.on_hkl_press)
     xid = self.proc_canvas.mpl_connect('button_press_event', self.on_button_press)
     xid = self.proc_canvas.mpl_connect('button_release_event',
                                        self.on_button_release)
 
     self.SetSizer(self.main_fig_sizer)
 
-  def draw_summary(self):
+  def onSGTextEnter(self, e):
+    self.spacegroup = str(self.hkl_sg.sg.GetValue())
+    self.draw_plots()
 
+  def onSGCheckbox(self, e):
+    if self.hkl_sg.toggle.GetValue():
+      if self.spacegroup is not None:
+        self.hkl_sg.sg.SetValue(str(self.spacegroup))
+      else:
+        self.spacegroup = 'P1'
+        self.hkl_sg.sg.SetValue('P1')
+    else:
+      self.hkl_sg.sg.SetValue('')
+    self.draw_plots()
+
+  def draw_summary(self):
     try:
       # Summary horizontal stack bar graph
       categories = [
@@ -803,243 +879,353 @@ class ProcessingTab(wx.Panel):
       self.proc_canvas.draw()
 
     except ValueError, e:
-      pass
+      print 'SUMMARY PLOT ERROR: ', e
 
   def draw_plots(self):
-
     if sum(self.nref_list) > 0 and sum(self.res_list) > 0:
-      try:
-        # Strong reflections per frame
-        self.nsref_axes.clear()
-        self.nsref_x = np.array([i + 1 for i in
-                                 range(len(self.img_list))]).astype(np.double)
-        self.nsref_y = np.array([np.nan if i == 0 else i for i in
-                                 self.nref_list]).astype(np.double)
-        nsref_ylabel = 'Reflections (I/{0}(I) > {1})' \
-                       ''.format(r'$\sigma$',
-                                 self.gparams.cctbx.selection.min_sigma)
-        self.nsref = self.nsref_axes.scatter(self.nsref_x, self.nsref_y, s=45,
-                                             marker='o', edgecolors='black',
-                                             color='#ca0020', picker=True)
-
-        nsref_median = np.median([i for i in self.nref_list if i > 0])
-        nsref_med = self.nsref_axes.axhline(nsref_median, c='#ca0020', ls='--')
-
-        self.nsref_axes.set_xlim(0, np.nanmax(self.nsref_x) + 2)
-        nsref_ymax = np.nanmax(self.nsref_y) * 1.25 + 10
-        if nsref_ymax == 0:
-          nsref_ymax = 100
-        self.nsref_axes.set_ylim(ymin=0, ymax=nsref_ymax)
-        self.nsref_axes.set_ylabel(nsref_ylabel, fontsize=10)
-        self.nsref_axes.set_xlabel('Frame')
-        self.nsref_axes.yaxis.get_major_ticks()[0].label1.set_visible(False)
-        self.nsref_axes.yaxis.get_major_ticks()[-1].label1.set_visible(False)
-
-      except ValueError, e:
-        print "NSREF ERROR: ", e
-
-      try:
-        # Resolution per frame
-        self.res_axes.clear()
-        self.res_x = np.array([i + 1 for i in range(len(self.img_list))]) \
-          .astype(np.double)
-        self.res_y = np.array([np.nan if i == 0 else i for i in self.res_list]) \
-          .astype(np.double)
-        res_m = np.isfinite(self.res_y)
-
-        self.res = self.res_axes.scatter(self.res_x[res_m], self.res_y[res_m],
-                                         s=45, marker='o', edgecolors='black',
-                                         color='#0571b0', picker=True)
-        res_median = np.median([i for i in self.res_list if i > 0])
-        res_med = self.res_axes.axhline(res_median, c='#0571b0',
-                                        ls='--')
-
-        self.res_axes.set_xlim(0, np.nanmax(self.res_x) + 2)
-        res_ymax = np.nanmax(self.res_y) * 1.1
-        res_ymin = np.nanmin(self.res_y) * 0.9
-        if res_ymin == res_ymax:
-          res_ymax = res_ymin + 1
-        self.res_axes.set_ylim(ymin=res_ymin, ymax=res_ymax)
-        res_ylabel = 'Resolution ({})'.format(r'$\AA$')
-        self.res_axes.set_ylabel(res_ylabel, fontsize=10)
-        self.res_axes.yaxis.get_major_ticks()[0].label1.set_visible(False)
-        self.res_axes.yaxis.get_major_ticks()[-1].label1.set_visible(False)
-        plt.setp(self.res_axes.get_xticklabels(), visible=False)
-
-        self.nsref_pick, = self.nsref_axes.plot(self.nsref_x[0],
-                                                self.nsref_y[0],
-                                                marker='o',
-                                                ms=12, alpha=0.5,
-                                                zorder=2,
-                                                color='yellow', visible=False)
-        self.res_pick, = self.res_axes.plot(self.res_x[0],
-                                            self.res_x[0],
-                                            marker='o',
-                                            zorder=2,
-                                            ms=12, alpha=0.5,
-                                            color='yellow', visible=False)
-        if self.pick['picked'] and self.pick['axis'] != 'summary':
-          img = self.pick['image']
-          idx = self.pick['index']
-          axis = self.pick['axis']
-          if axis == 'nsref':
-            if not np.isnan(self.nsref_y[idx]):
-              self.nsref_pick.set_visible(True)
-              self.nsref_pick.set_data(self.nsref_x[idx], self.nsref_y[idx])
-          elif axis == 'res':
-            if not np.isnan(self.res_y[idx]):
-              self.res_pick.set_visible(True)
-              self.res_pick.set_data(self.res_x[idx], self.res_y[idx])
-          self.info_txt.SetValue(img)
-          self.btn_left.Enable()
-          self.btn_right.Enable()
-          self.btn_viewer.Enable()
-
-      except ValueError, e:
-        print "RES ERROR: ", e
-
-
-      try:
-        # Unit cell histograms
-        finished = [i for i in self.finished_objects if
-                    i.fail == None and i.final['final'] != None]
-        if len(finished) > 0:
-          self.a_axes.clear()
-          self.b_axes.clear()
-          self.c_axes.clear()
-          self.alpha_axes.clear()
-          self.beta_axes.clear()
-          self.gamma_axes.clear()
-
-          a = [i.final['a'] for i in finished]
-          b = [i.final['b'] for i in finished]
-          c = [i.final['c'] for i in finished]
-          alpha = [i.final['alpha'] for i in finished]
-          beta = [i.final['beta'] for i in finished]
-          gamma = [i.final['gamma'] for i in finished]
-
-          self.a_axes.hist(a, 50, normed=False, facecolor='#4575b4', alpha=0.75,
-                           histtype='stepfilled')
-          self.a_axes.xaxis.get_major_ticks()[0].label1.set_visible(False)
-          self.a_axes.xaxis.get_major_ticks()[-1].label1.set_visible(False)
-          self.a_axes.xaxis.tick_top()
-          edge_ylabel = 'a, b, c ({})'.format(r'$\AA$')
-          self.a_axes.set_ylabel(edge_ylabel)
-
-          self.b_axes.hist(b, 50, normed=False, facecolor='#4575b4', alpha=0.75,
-                           histtype='stepfilled')
-          self.b_axes.xaxis.get_major_ticks()[0].label1.set_visible(False)
-          self.b_axes.xaxis.get_major_ticks()[-1].label1.set_visible(False)
-          self.b_axes.xaxis.tick_top()
-          plt.setp(self.b_axes.get_yticklabels(), visible=False)
-
-          self.c_axes.hist(c, 50, normed=False, facecolor='#4575b4', alpha=0.75,
-                           histtype='stepfilled')
-          self.c_axes.xaxis.get_major_ticks()[0].label1.set_visible(False)
-          self.c_axes.xaxis.get_major_ticks()[-1].label1.set_visible(False)
-          self.c_axes.xaxis.tick_top()
-          plt.setp(self.c_axes.get_yticklabels(), visible=False)
-
-          self.alpha_axes.hist(alpha, 50, normed=False, facecolor='#4575b4',
-                               alpha=0.75, histtype='stepfilled')
-          self.alpha_axes.xaxis.get_major_ticks()[0].label1.set_visible(False)
-          self.alpha_axes.xaxis.get_major_ticks()[-1].label1.set_visible(False)
-          ang_ylabel = '{}, {}, {} ({})'.format(r'$\alpha$', r'$\beta$',
-                                                r'$\gamma$', r'$^\circ$')
-          self.alpha_axes.set_ylabel(ang_ylabel)
-
-          self.beta_axes.hist(beta, 50, normed=False, facecolor='#4575b4',
-                              alpha=0.75, histtype='stepfilled')
-          self.beta_axes.xaxis.get_major_ticks()[0].label1.set_visible(False)
-          self.beta_axes.xaxis.get_major_ticks()[-1].label1.set_visible(False)
-          plt.setp(self.beta_axes.get_yticklabels(), visible=False)
-
-          self.gamma_axes.hist(gamma, 50, normed=False, facecolor='#4575b4',
-                               alpha=0.75, histtype='stepfilled')
-          self.gamma_axes.xaxis.get_major_ticks()[0].label1.set_visible(False)
-          self.gamma_axes.xaxis.get_major_ticks()[-1].label1.set_visible(False)
-          plt.setp(self.gamma_axes.get_yticklabels(), visible=False)
-
-      except ValueError, e:
-        print 'UC HISTOGRAM ERROR: ', e
-
-      try:
-        # Beam XY (cumulative)
-        info = []
-        wavelengths = []
-        distances = []
-        cells = []
-
-        # Import relevant info
-        pickles, _ = ginp.get_input(self.init.fin_base, filter=False)
-        for pickle in pickles:
-            if pickle.endswith(('pickle')):
-              try:
-                beam = ep.load(pickle)
-                info.append([pickle, beam['xbeam'], beam['ybeam']])
-                wavelengths.append(beam['wavelength'])
-                distances.append(beam['distance'])
-                cells.append(beam['observations'][0].unit_cell().parameters())
-              except Exception, e:
-                pass
-
-        # Calculate beam center coordinates and distances
-        if len(info) > 0:
-          beamX = [i[1] for i in info]
-          beamY = [j[2] for j in info]
-          beam_dist = [math.hypot(i[1] - np.median(beamX), i[2] -
-                                  np.median(beamY)) for i in info]
-
-          wavelength = np.median(wavelengths)
-          det_distance = np.median(distances)
-          a = np.median([i[0] for i in cells])
-          b = np.median([i[1] for i in cells])
-          c = np.median([i[2] for i in cells])
-
-          # Calculate predicted L +/- 1 misindexing distance for each cell edge
-          aD = det_distance * math.tan(2 * math.asin(wavelength / (2 * a)))
-          bD = det_distance * math.tan(2 * math.asin(wavelength / (2 * b)))
-          cD = det_distance * math.tan(2 * math.asin(wavelength / (2 * c)))
-
-          # Calculate axis limits of beam center scatter plot
-          beamxy_delta = np.ceil(np.max(beam_dist))
-          xmax = round(np.median(beamX) + beamxy_delta)
-          xmin = round(np.median(beamX) - beamxy_delta)
-          ymax = round(np.median(beamY) + beamxy_delta)
-          ymin = round(np.median(beamY) - beamxy_delta)
-
-          if xmax == xmin:
-            xmax += 0.5
-            xmin -= 0.5
-          if ymax == ymin:
-            ymax += 0.5
-            ymin -= 0.5
-
-          # Plot beam center scatter plot
-          self.bxy_axes.clear()
-          self.bxy_axes.axis('equal')
-          self.bxy_axes.axis([xmin, xmax, ymin, ymax])
-          self.bxy_axes.scatter(beamX, beamY, alpha=1, s=20, c='grey', lw=1)
-          self.bxy_axes.plot(np.median(beamX), np.median(beamY), markersize=8, marker='o', c='yellow', lw=2)
-
-          # Plot projected mis-indexing limits for all three axes
-          circle_a = plt.Circle((np.median(beamX), np.median(beamY)), radius=aD, color='r', fill=False, clip_on=True)
-          circle_b = plt.Circle((np.median(beamX), np.median(beamY)), radius=bD, color='g', fill=False, clip_on=True)
-          circle_c = plt.Circle((np.median(beamX), np.median(beamY)), radius=cD, color='b', fill=False, clip_on=True)
-          self.bxy_axes.add_patch(circle_a)
-          self.bxy_axes.add_patch(circle_b)
-          self.bxy_axes.add_patch(circle_c)
-          self.bxy_axes.set_xlabel('BeamX (mm)', fontsize=10)
-          self.bxy_axes.set_ylabel('BeamY (mm)', fontsize=10)
-          self.bxy_axes.set_title('Beam Center Coordinates')
-
-        self.int_canvas.draw()
-
-      except ValueError, e:
-        print 'BEAM XY ERROR: ', e
-
-
+      self.draw_integration_plots()
+      self.draw_uc_histograms()
+      self.draw_measured_indices()
+      self.int_canvas.draw()
     self.Layout()
+    self.SetupScrolling()
+
+
+  def draw_integration_plots(self):
+    try:
+      # Strong reflections per frame
+      self.nsref_axes.clear()
+      self.nsref_x = np.array([i + 1 for i in
+                               range(len(self.img_list))]).astype(np.double)
+      self.nsref_y = np.array([np.nan if i == 0 else i for i in
+                               self.nref_list]).astype(np.double)
+      nsref_ylabel = 'Reflections (I/{0}(I) > {1})' \
+                     ''.format(r'$\sigma$',
+                               self.gparams.cctbx.selection.min_sigma)
+      self.nsref = self.nsref_axes.scatter(self.nsref_x, self.nsref_y, s=45,
+                                           marker='o', edgecolors='black',
+                                           color='#ca0020', picker=True)
+
+      nsref_median = np.median([i for i in self.nref_list if i > 0])
+      nsref_med = self.nsref_axes.axhline(nsref_median, c='#ca0020', ls='--')
+
+      self.nsref_axes.set_xlim(0, np.nanmax(self.nsref_x) + 2)
+      nsref_ymax = np.nanmax(self.nsref_y) * 1.25 + 10
+      if nsref_ymax == 0:
+        nsref_ymax = 100
+      self.nsref_axes.set_ylim(ymin=0, ymax=nsref_ymax)
+      self.nsref_axes.set_ylabel(nsref_ylabel, fontsize=10)
+      self.nsref_axes.set_xlabel('Frame')
+      self.nsref_axes.yaxis.get_major_ticks()[0].label1.set_visible(False)
+      self.nsref_axes.yaxis.get_major_ticks()[-1].label1.set_visible(False)
+
+    except ValueError, e:
+      print "NSREF ERROR: ", e
+
+    try:
+      # Resolution per frame
+      self.res_axes.clear()
+      self.res_x = np.array([i + 1 for i in range(len(self.img_list))]) \
+        .astype(np.double)
+      self.res_y = np.array([np.nan if i == 0 else i for i in self.res_list]) \
+        .astype(np.double)
+      res_m = np.isfinite(self.res_y)
+
+      self.res = self.res_axes.scatter(self.res_x[res_m], self.res_y[res_m],
+                                       s=45, marker='o', edgecolors='black',
+                                       color='#0571b0', picker=True)
+      res_median = np.median([i for i in self.res_list if i > 0])
+      res_med = self.res_axes.axhline(res_median, c='#0571b0',
+                                      ls='--')
+
+      self.res_axes.set_xlim(0, np.nanmax(self.res_x) + 2)
+      res_ymax = np.nanmax(self.res_y) * 1.1
+      res_ymin = np.nanmin(self.res_y) * 0.9
+      if res_ymin == res_ymax:
+        res_ymax = res_ymin + 1
+      self.res_axes.set_ylim(ymin=res_ymin, ymax=res_ymax)
+      res_ylabel = 'Resolution ({})'.format(r'$\AA$')
+      self.res_axes.set_ylabel(res_ylabel, fontsize=10)
+      self.res_axes.yaxis.get_major_ticks()[0].label1.set_visible(False)
+      self.res_axes.yaxis.get_major_ticks()[-1].label1.set_visible(False)
+      plt.setp(self.res_axes.get_xticklabels(), visible=False)
+
+      self.nsref_pick, = self.nsref_axes.plot(self.nsref_x[0],
+                                              self.nsref_y[0],
+                                              marker='o',
+                                              ms=12, alpha=0.5,
+                                              zorder=2,
+                                              color='yellow', visible=False)
+      self.res_pick, = self.res_axes.plot(self.res_x[0],
+                                          self.res_x[0],
+                                          marker='o',
+                                          zorder=2,
+                                          ms=12, alpha=0.5,
+                                          color='yellow', visible=False)
+      if self.pick['picked'] and self.pick['axis'] != 'summary':
+        img = self.pick['image']
+        idx = self.pick['index']
+        axis = self.pick['axis']
+        if axis == 'nsref':
+          if not np.isnan(self.nsref_y[idx]):
+            self.nsref_pick.set_visible(True)
+            self.nsref_pick.set_data(self.nsref_x[idx], self.nsref_y[idx])
+        elif axis == 'res':
+          if not np.isnan(self.res_y[idx]):
+            self.res_pick.set_visible(True)
+            self.res_pick.set_data(self.res_x[idx], self.res_y[idx])
+        self.info_txt.SetValue(img)
+        self.btn_left.Enable()
+        self.btn_right.Enable()
+        self.btn_viewer.Enable()
+
+    except ValueError, e:
+      print "RES ERROR: ", e
+
+  def calculate_uc_histogram(self, a, axes, xticks_loc='top', set_ylim=False):
+    n, bins = np.histogram(a, 50)
+    left = np.array(bins[:-1])
+    right = np.array(bins[1:])
+    bottom = np.zeros(len(left))
+    top = bottom + n
+    XY = np.array(
+      [[left, left, right, right], [bottom, top, top, bottom]]).T
+    barpath = path.Path.make_compound_path_from_polys(XY)
+    patch = mpatches.PathPatch(barpath, fc='#4575b4', lw=0, alpha=0.75)
+    axes.add_patch(patch)
+
+    axes.set_xlim(left[0], right[-1])
+    if set_ylim:
+      axes.set_ylim(bottom.min(), 1.05 * top.max())
+
+    # axes.hist(a, 50, normed=False, facecolor='#4575b4',
+    #                  histtype='stepfilled')
+    axes.xaxis.get_major_ticks()[0].label1.set_visible(False)
+    axes.xaxis.get_major_ticks()[-1].label1.set_visible(False)
+
+    if xticks_loc == 'top':
+      axes.xaxis.tick_top()
+    elif xticks_loc == 'bottom':
+      axes.xaxis.tick_bottom()
+
+
+
+  def draw_uc_histograms(self):
+    try:
+      # Unit cell histograms
+      finished = [i for i in self.finished_objects if
+                  i.fail == None and i.final['final'] != None]
+      if len(finished) > 0:
+        self.a_axes.clear()
+        self.b_axes.clear()
+        self.c_axes.clear()
+        self.alpha_axes.clear()
+        self.beta_axes.clear()
+        self.gamma_axes.clear()
+
+        a = [i.final['a'] for i in finished]
+        b = [i.final['b'] for i in finished]
+        c = [i.final['c'] for i in finished]
+        alpha = [i.final['alpha'] for i in finished]
+        beta = [i.final['beta'] for i in finished]
+        gamma = [i.final['gamma'] for i in finished]
+
+        self.calculate_uc_histogram(a, self.a_axes,
+                                    xticks_loc='top', set_ylim=True)
+        edge_ylabel = 'a, b, c ({})'.format(r'$\AA$')
+        self.a_axes.set_ylabel(edge_ylabel)
+
+        self.calculate_uc_histogram(b, self.b_axes, xticks_loc='top')
+        plt.setp(self.b_axes.get_yticklabels(), visible=False)
+
+        self.calculate_uc_histogram(c, self.c_axes, xticks_loc='top')
+        plt.setp(self.c_axes.get_yticklabels(), visible=False)
+
+        self.calculate_uc_histogram(alpha, self.alpha_axes,
+                                    xticks_loc='bottom', set_ylim=True)
+        ang_ylabel = '{}, {}, {} ({})'.format(r'$\alpha$', r'$\beta$',
+                                              r'$\gamma$', r'$^\circ$')
+        self.alpha_axes.set_ylabel(ang_ylabel)
+
+        self.calculate_uc_histogram(beta, self.beta_axes, xticks_loc='bottom')
+        plt.setp(self.beta_axes.get_yticklabels(), visible=False)
+
+        self.calculate_uc_histogram(gamma, self.gamma_axes, xticks_loc='bottom')
+        plt.setp(self.gamma_axes.get_yticklabels(), visible=False)
+
+    except ValueError, e:
+      print 'UC HISTOGRAM ERROR: ', e
+
+  # def draw_beamXY_plot(self):
+      # try:
+      #   # Beam XY (cumulative)
+      #   info = []
+      #   wavelengths = []
+      #   distances = []
+      #   cells = []
+      #
+      #   # Import relevant info
+      #   for obj in self.finished_objects:
+      #     fin = obj.final
+      #     pickle = fin['final']
+      #     if 'wavelength' in obj.final:
+      #       info.append([pickle, fin['beamX'], fin['beamY']])
+      #       wavelengths.append(fin['wavelength'])
+      #       distances.append(fin['distance'])
+      #       cells.append([fin['a'], fin['b'], fin['c'],
+      #               fin['alpha'], fin['beta'], fin['gamma']])
+      #     else:
+      #       if (pickle is not None and
+      #               os.path.isfile(pickle)):
+      #         try:
+      #           beam = ep.load(pickle)
+      #           info.append([pickle, beam['xbeam'], beam['ybeam']])
+      #           wavelengths.append(beam['wavelength'])
+      #           distances.append(beam['distance'])
+      #           cells.append(beam['observations'][0].unit_cell().parameters())
+      #         except Exception, e:
+      #           print 'BEAMXY_PLOT_ERROR: ', e
+      #           pass
+      #
+      #   # Calculate beam center coordinates and distances
+      #   if len(info) > 0:
+      #     beamX = [i[1] for i in info]
+      #     beamY = [j[2] for j in info]
+      #     beam_dist = [math.hypot(i[1] - np.median(beamX), i[2] -
+      #                             np.median(beamY)) for i in info]
+      #
+      #     wavelength = np.median(wavelengths)
+      #     det_distance = np.median(distances)
+      #     a = np.median([i[0] for i in cells])
+      #     b = np.median([i[1] for i in cells])
+      #     c = np.median([i[2] for i in cells])
+      #
+      #     # Calculate predicted L +/- 1 misindexing distance for each cell edge
+      #     aD = det_distance * math.tan(2 * math.asin(wavelength / (2 * a)))
+      #     bD = det_distance * math.tan(2 * math.asin(wavelength / (2 * b)))
+      #     cD = det_distance * math.tan(2 * math.asin(wavelength / (2 * c)))
+      #
+      #     # Calculate axis limits of beam center scatter plot
+      #     beamxy_delta = np.ceil(np.max(beam_dist))
+      #     xmax = round(np.median(beamX) + beamxy_delta)
+      #     xmin = round(np.median(beamX) - beamxy_delta)
+      #     ymax = round(np.median(beamY) + beamxy_delta)
+      #     ymin = round(np.median(beamY) - beamxy_delta)
+      #
+      #     if xmax == xmin:
+      #       xmax += 0.5
+      #       xmin -= 0.5
+      #     if ymax == ymin:
+      #       ymax += 0.5
+      #       ymin -= 0.5
+      #
+      #     # Plot beam center scatter plot
+      #     self.bxy_axes.clear()
+      #     self.bxy_axes.axis('equal')
+      #     self.bxy_axes.axis([xmin, xmax, ymin, ymax])
+      #     self.bxy_axes.scatter(beamX, beamY, alpha=1, s=20, c='grey', lw=1)
+      #     self.bxy_axes.plot(np.median(beamX), np.median(beamY), markersize=8, marker='o', c='yellow', lw=2)
+      #
+      #     # Plot projected mis-indexing limits for all three axes
+      #     circle_a = plt.Circle((np.median(beamX), np.median(beamY)), radius=aD, color='r', fill=False, clip_on=True)
+      #     circle_b = plt.Circle((np.median(beamX), np.median(beamY)), radius=bD, color='g', fill=False, clip_on=True)
+      #     circle_c = plt.Circle((np.median(beamX), np.median(beamY)), radius=cD, color='b', fill=False, clip_on=True)
+      #     self.bxy_axes.add_patch(circle_a)
+      #     self.bxy_axes.add_patch(circle_b)
+      #     self.bxy_axes.add_patch(circle_c)
+      #     self.bxy_axes.set_xlabel('BeamX (mm)', fontsize=10)
+      #     self.bxy_axes.set_ylabel('BeamY (mm)', fontsize=10)
+      #     self.bxy_axes.set_title('Beam Center Coordinates')
+      #
+      #   self.int_canvas.draw()
+      #
+      # except ValueError, e:
+      #   print 'BEAM XY ERROR: ', e
+
+  def draw_measured_indices(self):
+    # Extract indices from list and apply symmetry if any via miller object
+    if self.idx_array is None:
+      self.idx_array = flex.miller_index(self.indices)
+    else:
+      if self.indices != []:
+        self.idx_array.extend(flex.miller_index(self.indices))
+    self.indices = []
+
+    if self.hkl_sg.toggle.GetValue():
+      try:
+        crystal_symmetry = crystal.symmetry(space_group_symbol=self.spacegroup)
+      except RuntimeError:
+        crystal_symmetry = crystal.symmetry(space_group_symbol='P1')
+    else:
+      crystal_symmetry = crystal.symmetry(space_group_symbol='P1')
+
+    try:
+      ms = miller.set(crystal_symmetry=crystal_symmetry,
+                      indices=self.idx_array, anomalous_flag=False)
+      equiv = ms.multiplicities().merge_equivalents()
+      merged_indices = equiv.redundancies()
+
+    except Exception, e:
+      print 'HKL ERROR: ', e
+      return
+
+    # Draw a h0, k0, or l0 slice of merged data so far
+    self.hkl_axes.clear()
+    try:
+      self.hkl_colorbar.remove()
+    except Exception:
+      pass
+
+    slice = merged_indices.slice(axis=self.hkl_view_axis,
+                                 slice_start=0, slice_end=0)
+
+    hkl = [i[0] for i in slice]
+    freq = [i[1] for i in slice]
+
+    if self.hkl_view_axis == 'l':
+      x = [i[0] for i in hkl]
+      y = [i[1] for i in hkl]
+      self.hkl_axes.set_xlabel('h', weight='bold')
+      self.hkl_axes.set_ylabel('k', weight='bold', rotation='horizontal')
+    elif self.hkl_view_axis == 'k':
+      x = [i[0] for i in hkl]
+      y = [i[2] for i in hkl]
+      self.hkl_axes.set_xlabel('h', weight='bold')
+      self.hkl_axes.set_ylabel('l', weight='bold', rotation='horizontal')
+    elif self.hkl_view_axis == 'h':
+      x = [i[1] for i in hkl]
+      y = [i[2] for i in hkl]
+      self.hkl_axes.set_xlabel('k', weight='bold')
+      self.hkl_axes.set_ylabel('l', weight='bold', rotation='horizontal')
+    else:
+      # if for some reason this goes to plotting without any indices
+      x = np.zeros(500)
+      y = np.zeros(500)
+      freq = np.zeros(500)
+
+    # Format plot
+    hkl_scatter = self.hkl_axes.scatter(x, y, c=freq, cmap="jet", s=1)
+    self.hkl_axes.axhline(0, lw=0.5, c='black', ls='-')
+    self.hkl_axes.axvline(0, lw=0.5, c='black', ls='-')
+    self.hkl_axes.set_xticks([])
+    self.hkl_axes.set_yticks([])
+    self.hkl_axes.xaxis.set_label_coords(x=1, y=0.5)
+    self.hkl_axes.yaxis.set_label_coords(x=0.5, y=1)
+
+    try:
+      xmax = abs(max(x, key=abs))
+      ymax = abs(max(y, key=abs))
+      self.hkl_axes.set_xlim(xmin=-xmax, xmax=xmax)
+      self.hkl_axes.set_ylim(ymin=-ymax, ymax=ymax)
+    except ValueError, e:
+      pass
+
+    norm = colors.Normalize(vmin=0, vmax=np.max(freq))
+    self.hkl_colorbar = self.hkl_figure.colorbar(hkl_scatter, ax=self.hkl_axes,
+                                                 cmap='jet', norm=norm,
+                                                 orientation='vertical',
+                                                 aspect=40,
+                                                 use_gridspec=True)
 
   def onImageView(self, e):
     filepath = self.info_txt.GetValue()
@@ -1133,6 +1319,16 @@ class ProcessingTab(wx.Panel):
       self.pick['index'] = e.xdata
     self.draw_summary()
 
+  def on_hkl_press(self, event):
+    if event.inaxes == self.hkl_axes:
+      if self.hkl_view_axis == 'h':
+        self.hkl_view_axis = 'k'
+      elif self.hkl_view_axis == 'k':
+        self.hkl_view_axis = 'l'
+      elif self.hkl_view_axis == 'l':
+        self.hkl_view_axis = 'h'
+      self.draw_plots()
+
   def on_button_press(self, event):
     if event.button != 1:
       self.pick['picked'] = False
@@ -1144,6 +1340,8 @@ class ProcessingTab(wx.Panel):
       elif event.inaxes == self.res_axes:
         self.res_pick.set_visible(False)
 
+      self.draw_plots()
+
     if event.dblclick:
       self.dblclick = True
     else:
@@ -1154,20 +1352,22 @@ class ProcessingTab(wx.Panel):
       self.show_image_group(e=event)
       self.view_proc_images()
 
-
-class SummaryTab(wx.Panel):
+class SummaryTab(ScrolledPanel):
   def __init__(self,
                parent,
+               init=None,
                gparams=None,
                final_objects=None,
                out_dir=None,
                plot=None):
-    wx.Panel.__init__(self, parent)
+    ScrolledPanel.__init__(self, parent)
 
+    self.parent = parent
     self.final_objects = final_objects
     self.gparams = gparams
     self.out_dir = out_dir
     self.plot = plot
+    self.init = init
 
     summary_sizer = wx.BoxSizer(wx.VERTICAL)
 
@@ -1315,35 +1515,23 @@ class SummaryTab(wx.Panel):
     dat_box_sizer.Add(dat_btn_sizer, flag=wx.ALL, border=10)
     summary_sizer.Add(dat_box_sizer, flag=wx.EXPAND | wx.ALL, border=10)
 
-    # Clustering info (if performed)
-    if self.gparams.analysis.run_clustering:
-      cluster_box = wx.StaticBox(self, label='Unit Cell Clustering')
-      cluster_box_sizer = wx.StaticBoxSizer(cluster_box, wx.VERTICAL)
-      self.cluster_panel = ScrolledPanel(self, size=(-1, 100))
-      self.cluster_panel.SetFont(bfont)
-      self.cluster_box_grid = wx.GridBagSizer(5, 10)
-      self.cluster_panel.SetSizer(self.cluster_box_grid)
+    # Clustering info
+    self.cluster_panel = wx.Panel(self)
+    cluster_box = wx.StaticBox(self.cluster_panel, label='Unit Cell Clustering')
+    cluster_box_sizer = wx.StaticBoxSizer(cluster_box, wx.VERTICAL)
+    self.cluster_panel.SetSizer(cluster_box_sizer)
+    self.cluster_info = ct.CustomListCtrl(self.cluster_panel, size=(-1, 100))
+    self.cluster_info.ctr.InsertColumn(0, "#")
+    self.cluster_info.ctr.InsertColumn(1, "Lattice")
+    self.cluster_info.ctr.InsertColumn(2, "Unit Cell")
+    self.cluster_info.ctr.InsertColumn(3, "Filename")
+    self.cluster_info.ctr.setResizeColumn(3)
+    cluster_box_sizer.Add(self.cluster_info, proportion=1, flag=wx.EXPAND)
+    summary_sizer.Add(self.cluster_panel, flag=wx.EXPAND | wx.ALL, border=10)
 
-      self.cluster_box_grid.Add(wx.StaticText(self.cluster_panel,
-                                              label='No. Images'),
-                                pos=(0, 0))
-      self.cluster_box_grid.Add(wx.StaticText(self.cluster_panel,
-                                              label='Bravais Lattice'),
-                                pos=(0, 1))
-      self.cluster_box_grid.Add(wx.StaticText(self.cluster_panel,
-                                              label='Unit Cell'),
-                                pos=(0, 2))
-      self.cluster_box_grid.Add(wx.StaticText(self.cluster_panel,
-                                              label='Filename'),
-                                pos=(0, 3))
-      self.cluster_box_grid.AddGrowableCol(2)
-      self.cluster_panel.SetFont(sfont)
-
-      # Insert into sizers
-      cluster_box_sizer.Add(self.cluster_panel, flag=wx.EXPAND |wx.ALL,
-                            border=10)
-      summary_sizer.Add(cluster_box_sizer, flag=wx.EXPAND | wx.ALL, border=10)
-
+    # Hide if not done
+    if not self.gparams.analysis.run_clustering:
+      self.cluster_panel.Hide()
 
     # Summary
     smr_box = wx.StaticBox(self, label='Run Summary')
@@ -1374,10 +1562,16 @@ class SummaryTab(wx.Panel):
     self.smr_runprime = ct.GradButton(self,
                                       bmp=prime_bmp,
                                       label='  Run PRIME', size=(250, -1))
+    cluster_bmp = bitmaps.fetch_custom_icon_bitmap('distance_difference',
+                                                   scale=(24, 24))
+    self.smr_runcluster = ct.GradButton(self,
+                                      bmp=cluster_bmp,
+                                      label='  Run CLUSTER', size=(250, -1))
 
-    smr_btn_sizer.Add(self.smr_runprime)
-    # smr_btn_sizer.Add(self.smr_runmerge, flag=wx.TOP, border=5)
+    smr_btn_sizer.Add(self.smr_runcluster)
+    smr_btn_sizer.Add(self.smr_runprime, flag=wx.TOP, border=5)
     self.Bind(wx.EVT_BUTTON, self.onPRIME, self.smr_runprime)
+    self.Bind(wx.EVT_BUTTON, self.onCLUSTER, self.smr_runcluster)
 
     if self.gparams.advanced.integrate_with == 'cctbx':
       self.noprf_txt = wx.StaticText(self, label='20')
@@ -1415,6 +1609,7 @@ class SummaryTab(wx.Panel):
 
     self.SetFont(sfont)
     self.SetSizer(summary_sizer)
+    self.SetupScrolling()
 
   def onPRIME(self, e):
     from prime.postrefine.mod_gui_init import PRIMEWindow
@@ -1424,6 +1619,47 @@ class SummaryTab(wx.Panel):
     self.prime_window.SetMinSize(self.prime_window.GetEffectiveMinSize())
     self.prime_window.Show(True)
 
+  def onCLUSTER(self, e):
+    cluster_dlg = dlg.ClusterDialog(self)
+    cluster_dlg.write_files.SetValue(self.gparams.analysis.cluster_write_files)
+    cluster_dlg.cluster_threshold.ctr.SetValue(self.gparams.analysis.cluster_threshold)
+    cluster_dlg.cluster_limit.ctr.SetValue(self.gparams.analysis.cluster_limit)
+    if self.gparams.analysis.cluster_n_images > 0:
+      cluster_dlg.cluster_n_images.ctr.SetValue(self.gparams.analysis.cluster_n_images)
+
+    if (cluster_dlg.ShowModal() == wx.ID_OK):
+      self.cluster_panel.Show()
+      self.Layout()
+      self.gparams.analysis.run_clustering = True
+      self.gparams.analysis.cluster_write_files = cluster_dlg.write_files.GetValue()
+      self.gparams.analysis.cluster_threshold = cluster_dlg.cluster_threshold.ctr.GetValue()
+      self.gparams.analysis.cluster_limit = cluster_dlg.cluster_limit.ctr.GetValue()
+      if cluster_dlg.cluster_n_images.toggle.GetValue():
+        self.gparams.analysis.cluster_n_images = int(cluster_dlg.cluster_n_images.ctr.GetValue())
+      else:
+        self.gparams.analysis.cluster_n_images = 0
+      self.init.params = self.gparams
+
+      analysis = Analyzer(init=self.init,
+                          all_objects=self.final_objects,
+                          gui_mode=True)
+      pg, uc, clusters = analysis.unit_cell_analysis()
+      if clusters != []:
+        self.report_clustering_results(clusters=clusters)
+
+  def report_clustering_results(self, clusters):
+    self.cluster_info.ctr.DeleteAllItems()
+    clusters = sorted(clusters, key=lambda i:i['number'], reverse=True)
+    for c in clusters:
+      i = clusters.index(c)
+      idx = self.cluster_info.ctr.InsertStringItem(i, str(c['number']))
+      self.cluster_info.ctr.SetStringItem(idx, 1, str(c['pg']))
+      self.cluster_info.ctr.SetStringItem(idx, 2, str(c['uc']))
+      if c['filename'] != '*':
+        self.cluster_info.ctr.SetStringItem(idx, 3, c['filename'])
+
+    self.Refresh()
+    self.SetupScrolling()
 
   def onPlotHeatmap(self, e):
     if self.final_objects != None:
@@ -1468,6 +1704,7 @@ class ProcWindow(wx.Frame):
     self.finished_objects = []
     self.read_object_files = []
     self.new_images = []
+    self.indices = []
 
     self.main_panel = wx.Panel(self)
     self.main_sizer = wx.BoxSizer(wx.VERTICAL)
@@ -1538,7 +1775,6 @@ class ProcWindow(wx.Frame):
     # Event bindings
     self.Bind(thr.EVT_ALLDONE, self.onFinishedProcess)
     self.Bind(thr.EVT_IMGDONE, self.onFinishedImageFinder)
-    self.Bind(thr.EVT_OBJDONE, self.onFinishedObjectFinder)
     self.sb.Bind(wx.EVT_SIZE, self.onStatusBarResize)
     self.Bind(wx.EVT_TIMER, self.onTimer, id=self.timer.GetId())
 
@@ -1575,6 +1811,7 @@ class ProcWindow(wx.Frame):
     self.gauge_process.SetPosition((rect.x + 2, rect.y + 2))
     self.gauge_process.SetSize((rect.width - 4, rect.height - 4))
     self.Refresh()
+    self.Layout()
 
   def onAbort(self, e):
     if self.gparams.mp_method == 'lsf':
@@ -1605,7 +1842,9 @@ class ProcWindow(wx.Frame):
 
     # Re-generate new image info to include un-processed images
     input_entries = [i for i in self.gparams.input if i != None]
-    ext_file_list = ginp.make_input_list(input_entries)
+    ext_file_list = ginp.make_input_list(input_entries,
+                                         filter=True,
+                                         filter_type='image')
     old_file_list = [i.raw_img for i in self.finished_objects]
     new_file_list = [i for i in ext_file_list if i not in old_file_list]
 
@@ -1617,17 +1856,23 @@ class ProcWindow(wx.Frame):
     self.img_list = [[i, len(ext_file_list) + 1, j] for i, j in
                      enumerate(old_file_list, 1)]
 
-    # Reset toolbar buttons
-    self.proc_toolbar.EnableTool(self.tb_btn_abort.GetId(), True)
-    self.proc_toolbar.EnableTool(self.tb_btn_resume.GetId(), False)
-    self.proc_toolbar.EnableTool(self.tb_btn_monitor.GetId(), True)
+    # Check if no images are left to process:
+    if len(self.new_images) == 0:
+      self.state = 'finished'
+      self.finish_process()
+    else:
+      # Reset toolbar buttons
+      self.proc_toolbar.EnableTool(self.tb_btn_abort.GetId(), True)
+      self.proc_toolbar.EnableTool(self.tb_btn_resume.GetId(), False)
+      self.proc_toolbar.EnableTool(self.tb_btn_monitor.GetId(), True)
 
-    # Run processing, etc.
-    self.state = 'resume'
-    self.process_images()
-    self.timer.Start(5000)
+      # Run processing, etc.
+      self.state = 'resume'
+      self.process_images()
+      self.timer.Start(5000)
 
   def recover(self, int_path, status, init, params):
+    self.recovery = True
     self.init = init
     self.gparams = params
     self.tmp_abort_file = os.path.join(int_path, '.abort.tmp')
@@ -1641,17 +1886,11 @@ class ProcWindow(wx.Frame):
     self.nref_xaxis = [i[0] for i in self.img_list]
     self.res_list = [0] * len(self.img_list)
 
-    self.start_object_finder = True
     self.state = status
-    self.start_object_finder = False
+    self.finished_objects = []
 
-    self.display_log()
-    object_finder = thr.ObjectFinderThread(self,
-                                           object_folder=self.init.obj_base,
-                                           fix_paths=True,
-                                           new_fin_base=init.fin_base)
-    object_finder.start()
-
+    self.last_object = None
+    self.finish_process()
 
   def run(self, init):
     # Initialize IOTA parameters and log
@@ -1713,10 +1952,10 @@ class ProcWindow(wx.Frame):
         iterable = self.new_images
         self.img_list.extend(self.new_images)
         self.new_images = []
-        self.status_summary = [0] * len(self.img_list)
-        self.nref_list = [0] * len(self.img_list)
-        self.nref_xaxis = [i[0] for i in self.img_list]
-        self.res_list = [0] * len(self.img_list)
+        # self.status_summary = [0] * len(self.img_list)
+        # self.nref_list = [0] * len(self.img_list)
+        # self.nref_xaxis = [i[0] for i in self.img_list]
+        # self.res_list = [0] * len(self.img_list)
         self.status_txt.SetLabel('Processing {} remaining images ({} total)...'
                                  ''.format(len(iterable), len(self.img_list)))
         self.start_object_finder = True
@@ -1780,10 +2019,8 @@ class ProcWindow(wx.Frame):
         return
 
 
-  def analyze_results(self):
+  def analyze_results(self, analysis=None):
     if len(self.final_objects) == 0:
-      self.display_log()
-      self.plot_integration()
       self.status_txt.SetForegroundColour('red')
       self.status_txt.SetLabel('No images successfully integrated')
 
@@ -1793,9 +2030,11 @@ class ProcWindow(wx.Frame):
         self.status_txt.SetLabel('Analyzing results...')
 
         # Do analysis
-        analysis = Analyzer(self.init,
-                            self.finished_objects,
-                            gui_mode=True)
+        if analysis is None:
+          self.recovery = False
+          analysis = Analyzer(self.init,
+                              self.finished_objects,
+                              gui_mode=True)
         plot = Plotter(self.gparams,
                        self.final_objects,
                        self.init.viz_base)
@@ -1804,10 +2043,11 @@ class ProcWindow(wx.Frame):
         prime_file = os.path.join(self.init.int_base,
                                   '{}.phil'.format(self.gparams.advanced.prime_prefix))
         self.summary_tab = SummaryTab(self.proc_nb,
-                                      self.gparams,
-                                      self.final_objects,
-                                      os.path.dirname(prime_file),
-                                      plot)
+                                      init=self.init,
+                                      gparams=self.gparams,
+                                      final_objects=self.final_objects,
+                                      out_dir=os.path.dirname(prime_file),
+                                      plot=plot)
 
         # Run information
         self.summary_tab.title_txt.SetLabel(noneset(self.gparams.description))
@@ -1829,25 +2069,16 @@ class ProcWindow(wx.Frame):
           self.summary_tab.spa_std.SetLabel("{:4.2f}".format(np.std(analysis.a)))
 
         # Dataset information
-        analysis.print_results()
-        pg, uc, clusters = analysis.unit_cell_analysis()
+        if self.recovery:
+          pg = analysis.cons_pg
+          uc = analysis.cons_uc
+          clusters = analysis.clusters
+        else:
+          analysis.print_results()
+          pg, uc, clusters = analysis.unit_cell_analysis()
 
         if clusters != []:
-          for cluster in clusters:
-            row = clusters.index(cluster) + 1
-            n_ucs = wx.StaticText(self.summary_tab.cluster_panel,
-                                  label=str(cluster['number']))
-            pg_info = wx.StaticText(self.summary_tab.cluster_panel,
-                                    label=str(cluster['pg']))
-            uc_info = wx.StaticText(self.summary_tab.cluster_panel,
-                                    label=str(cluster['uc']))
-            fname = wx.StaticText(self.summary_tab.cluster_panel,
-                                  label=str(cluster['filename']))
-            self.summary_tab.cluster_box_grid.Add(n_ucs, pos=(row, 0))
-            self.summary_tab.cluster_box_grid.Add(pg_info, pos=(row, 1))
-            self.summary_tab.cluster_box_grid.Add(uc_info, pos=(row, 2))
-            self.summary_tab.cluster_box_grid.Add(fname, pos=(row, 3))
-          self.summary_tab.cluster_panel.SetupScrolling()
+          self.summary_tab.report_clustering_results(clusters=clusters)
 
         self.summary_tab.pg_txt.SetLabel(str(pg))
         unit_cell = " ".join(['{:4.1f}'.format(i) for i in uc])
@@ -1857,46 +2088,65 @@ class ProcWindow(wx.Frame):
                                   u'\u212B'))
         self.summary_tab.rs_txt.SetLabel(res)
 
-        with warnings.catch_warnings():
-          # To catch any 'mean of empty slice' runtime warnings
-          warnings.simplefilter("ignore", category=RuntimeWarning)
-          beamX, beamY = plot.calculate_beam_xy()[:2]
-          pixel_size = plot.calculate_beam_xy()[-1]
-          beamX_mm = np.median(beamX)
-          beamY_mm = np.median(beamY)
-          beamX_px = np.median(beamX) / pixel_size
-          beamY_px = np.median(beamY) / pixel_size
-          beamXY = "X = {:4.1f} mm / {:4.0f} px\n" \
-                   "Y = {:4.1f} mm / {:4.0f} px" \
-                   "".format(beamX_mm, beamX_px, beamY_mm, beamY_px)
-
+        if self.recovery and (
+                hasattr(analysis, 'beamX_mm') and
+                hasattr(analysis, 'beamY_mm') and
+                hasattr(analysis, 'pixel_size')
+                ):
+          beamX_mm = analysis.beamX_mm
+          beamY_mm = analysis.beamY_mm
+          pixel_size = analysis.pixel_size
+        else:
+          with warnings.catch_warnings():
+            # To catch any 'mean of empty slice' runtime warnings
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            beamxy_calc = plot.calculate_beam_xy()
+            beamX, beamY = beamxy_calc[:2]
+            pixel_size = beamxy_calc[-1]
+            beamX_mm = np.median(beamX)
+            beamY_mm = np.median(beamY)
+        beamX_px = beamX_mm / pixel_size
+        beamY_px = beamY_mm / pixel_size
+        beamXY = "X = {:4.1f} mm / {:4.0f} px\n" \
+                 "Y = {:4.1f} mm / {:4.0f} px" \
+                 "".format(beamX_mm, beamX_px, beamY_mm, beamY_px)
         self.summary_tab.xy_txt.SetLabel(beamXY)
 
         # Summary
-        self.summary_tab.readin_txt.SetLabel(str(len(analysis.all_objects)))
-        self.summary_tab.nodiff_txt.SetLabel(str(len(analysis.no_diff_objects)))
-        self.summary_tab.w_diff_txt.SetLabel(str(len(analysis.diff_objects)))
-        if self.gparams.advanced.integrate_with == 'cctbx':
-          self.summary_tab.noint_txt.SetLabel(str(len(analysis.not_int_objects)))
-          self.summary_tab.noprf_txt.SetLabel(str(len(analysis.filter_fail_objects)))
-        elif self.gparams.advanced.integrate_with == 'dials':
-          self.summary_tab.nospf_txt.SetLabel(str(len(analysis.not_spf_objects)))
-          self.summary_tab.noidx_txt.SetLabel(str(len(analysis.not_idx_objects)))
-          self.summary_tab.noint_txt.SetLabel(str(len(analysis.not_int_objects)))
-          self.summary_tab.noflt_txt.SetLabel(str(len(analysis.filter_fail_objects)))
-        self.summary_tab.final_txt.SetLabel(str(len(analysis.final_objects)))
+        if self.recovery:
+          self.summary_tab.readin_txt.SetLabel(str(analysis.n_all_objects))
+          self.summary_tab.nodiff_txt.SetLabel(str(analysis.n_no_diff_objects))
+          self.summary_tab.w_diff_txt.SetLabel(str(analysis.n_diff_objects))
+          if self.gparams.advanced.integrate_with == 'cctbx':
+            self.summary_tab.noint_txt.SetLabel(str(analysis.n_not_int_objects))
+            self.summary_tab.noprf_txt.SetLabel(str(analysis.n_filter_fail_objects))
+          elif self.gparams.advanced.integrate_with == 'dials':
+            self.summary_tab.nospf_txt.SetLabel(str(analysis.n_not_spf_objects))
+            self.summary_tab.noidx_txt.SetLabel(str(analysis.n_not_idx_objects))
+            self.summary_tab.noint_txt.SetLabel(str(analysis.n_not_int_objects))
+            self.summary_tab.noflt_txt.SetLabel(str(analysis.n_filter_fail_objects))
+          self.summary_tab.final_txt.SetLabel(str(analysis.n_final_objects))
+        else:
+          self.summary_tab.readin_txt.SetLabel(str(len(analysis.all_objects)))
+          self.summary_tab.nodiff_txt.SetLabel(str(len(analysis.no_diff_objects)))
+          self.summary_tab.w_diff_txt.SetLabel(str(len(analysis.diff_objects)))
+          if self.gparams.advanced.integrate_with == 'cctbx':
+            self.summary_tab.noint_txt.SetLabel(str(len(analysis.not_int_objects)))
+            self.summary_tab.noprf_txt.SetLabel(str(len(analysis.filter_fail_objects)))
+          elif self.gparams.advanced.integrate_with == 'dials':
+            self.summary_tab.nospf_txt.SetLabel(str(len(analysis.not_spf_objects)))
+            self.summary_tab.noidx_txt.SetLabel(str(len(analysis.not_idx_objects)))
+            self.summary_tab.noint_txt.SetLabel(str(len(analysis.not_int_objects)))
+            self.summary_tab.noflt_txt.SetLabel(str(len(analysis.filter_fail_objects)))
+          self.summary_tab.final_txt.SetLabel(str(len(analysis.final_objects)))
 
-        # Generate input file for PRIME
-        analysis.print_summary()
-        analysis.make_prime_input(filename=prime_file)
+          # Generate input file for PRIME
+          analysis.print_summary()
+          analysis.make_prime_input(filename=prime_file)
 
         # Display summary
         self.proc_nb.AddPage(self.summary_tab, 'Analysis')
         self.proc_nb.SetSelection(2)
-
-        # Finish up
-        self.display_log()
-        self.plot_integration()
 
       # Signal end of run
       font = self.sb.GetFont()
@@ -1904,6 +2154,10 @@ class ProcWindow(wx.Frame):
       self.status_txt.SetFont(font)
       self.status_txt.SetForegroundColour('blue')
       self.status_txt.SetLabel('DONE')
+
+    # Finish up
+    self.display_log()
+    self.plot_integration()
 
     # Stop timer
     self.timer.Stop()
@@ -1914,34 +2168,88 @@ class ProcWindow(wx.Frame):
     if os.path.isfile(self.init.logfile):
       with open(self.init.logfile, 'r') as out:
         out.seek(self.bookmark)
-        output = out.readlines()
+        output = out.read()
         self.bookmark = out.tell()
 
       ins_pt = self.log_tab.log_window.GetInsertionPoint()
-      for i in output:
-        self.log_tab.log_window.AppendText(i)
-        self.log_tab.log_window.SetInsertionPoint(ins_pt)
-
+      self.log_tab.log_window.AppendText(output)
+      self.log_tab.log_window.SetInsertionPoint(ins_pt)
 
   def plot_integration(self):
+    if (self.nref_list is not None and self.res_list is not None) :
 
-    if len(self.finished_objects) > 0:
-      for obj in self.finished_objects:
+      self.chart_tab.init = self.init
+      self.chart_tab.gparams = self.gparams
+      self.chart_tab.finished_objects = self.finished_objects
+      self.chart_tab.img_list = self.img_list
+      self.chart_tab.res_list = self.res_list
+      self.chart_tab.nref_list = self.nref_list
+
+      if self.chart_tab.spacegroup is None:
+        if self.gparams.advanced.integrate_with == 'dials':
+          sg = self.gparams.dials.target_space_group
+          if sg is not None:
+            self.chart_tab.spacegroup = str(sg)
+        else:
+          self.chart_tab.spacegroup = 'P1'
+
+      self.chart_tab.indices = self.indices
+      self.indices = []
+      self.chart_tab.draw_plots()
+      self.chart_tab.draw_summary()
+
+  def find_objects(self, find_old=False):
+    if find_old:
+      min_back = None
+    else:
+      min_back = -1
+    object_files = ginp.get_file_list(self.init.obj_base,
+                                      ext_only='int',
+                                      min_back=min_back)
+    new_object_files = list(set(object_files) - set(self.read_object_files))
+    new_objects = [self.read_object_file(i) for i in new_object_files]
+    new_finished_objects = [i for i in new_objects if
+                            i is not None and i.status == 'final']
+
+    self.finished_objects.extend(new_finished_objects)
+    self.read_object_files = [i.obj_file for i in self.finished_objects]
+
+    self.populate_data_points(objects=new_finished_objects)
+
+    if str(self.state).lower() in ('finished', 'aborted', 'unknown'):
+      if self.finished_objects != []:
+        self.finish_process()
+      else:
+        return
+    else:
+      self.start_object_finder = True
+
+  def read_object_file(self, filepath):
+    try:
+      object = ep.load(filepath)
+      if object.final['final'] is not None:
+        pickle_path = object.final['final']
+        if os.path.isfile(pickle_path):
+          pickle = ep.load(pickle_path)
+          object.final['observations'] = pickle['observations'][0]
+      return object
+    except Exception, e:
+      print 'OBJECT_IMPORT_ERROR for {}: {}'.format(filepath, e)
+      return None
+
+  def populate_data_points(self, objects=None):
+    self.indices = []
+    if objects is not None:
+      for obj in objects:
         try:
           self.nref_list[obj.img_index - 1] = obj.final['strong']
           self.res_list[obj.img_index - 1] = obj.final['res']
+          if 'observations' in obj.final:
+            self.indices.extend([i[0] for i in obj.final['observations']])
         except Exception, e:
-          print 'OBJECT_ERROR:', e
+          print 'OBJECT_ERROR:', e, "({})".format(obj.obj_file)
           pass
 
-    self.chart_tab.init = self.init
-    self.chart_tab.gparams = self.gparams
-    self.chart_tab.finished_objects = self.finished_objects
-    self.chart_tab.img_list = self.img_list
-    self.chart_tab.res_list = self.res_list
-    self.chart_tab.nref_list = self.nref_list
-    self.chart_tab.draw_plots()
-    self.chart_tab.draw_summary()
 
   def onTimer(self, e):
     if self.abort_initiated:
@@ -1962,9 +2270,11 @@ class ProcWindow(wx.Frame):
     # Find processed image objects
     if self.start_object_finder:
       self.start_object_finder = False
-      object_finder = thr.ObjectFinderThread(self,
-                                             object_folder=self.init.obj_base)
-      object_finder.start()
+      if self.finished_objects is None or self.finished_objects == []:
+        self.last_object = None
+      else:
+        self.last_object = self.finished_objects[-1]
+      self.find_objects()
 
     if len(self.finished_objects) > self.obj_counter:
       self.plot_integration()
@@ -2028,25 +2338,23 @@ class ProcWindow(wx.Frame):
 
   def onFinishedProcess(self, e):
     pass
-    # if self.gparams.mp_method != 'lsf':
-    #   self.img_objects = e.GetValue()
-    #   self.finish_process()
 
   def onFinishedImageFinder(self, e):
     new_img = e.GetValue()
     self.new_images = self.new_images + new_img
     self.find_new_images = self.monitor_mode
 
-  def onFinishedObjectFinder(self, e):
-    self.finished_objects = e.GetValue()
-    if str(self.state).lower() in ('finished', 'aborted', 'unknown'):
-      self.finish_process()
-    else:
-      self.start_object_finder = True
-
   def finish_process(self):
     import shutil
     self.timer.Stop()
+
+    if self.finished_objects is None:
+      font = self.sb.GetFont()
+      font.SetWeight(wx.BOLD)
+      self.status_txt.SetFont(font)
+      self.status_txt.SetForegroundColour('blue')
+      self.status_txt.SetLabel('OBJECT READ-IN ERROR! NONE IMPORTED')
+      return
 
     if str(self.state).lower() in ('finished', 'aborted', 'unknown'):
       self.gauge_process.Hide()
@@ -2058,15 +2366,34 @@ class ProcWindow(wx.Frame):
       self.proc_toolbar.EnableTool(self.tb_btn_abort.GetId(), False)
       self.proc_toolbar.EnableTool(self.tb_btn_monitor.GetId(), False)
       self.proc_toolbar.ToggleTool(self.tb_btn_monitor.GetId(), False)
-      if len(self.finished_objects) > 0:
-        self.plot_integration()
+
+      analysis_file = os.path.join(self.init.int_base, 'analysis.pickle')
+      if os.path.isfile(analysis_file):
+        analysis = ep.load(analysis_file)
+      else:
+        analysis = None
+
+      if self.finished_objects == []:
+        if analysis is not None and hasattr(analysis, 'image_objects'):
+          self.finished_objects = [i for i in analysis.image_objects if
+                                   i is not None and i.status == 'final']
+        else:
+          self.find_objects(find_old=True)
+
+      self.populate_data_points(objects=self.finished_objects)
+
       if str(self.state).lower() == 'finished':
         self.final_objects = [i for i in self.finished_objects if i.fail is None]
-        self.analyze_results()
+        self.analyze_results(analysis=analysis)
+
       else:
+        if len(self.finished_objects) > 0:
+          self.plot_integration()
         if os.path.isfile(os.path.join(self.init.int_base, 'init.cfg')):
           self.proc_toolbar.EnableTool(self.tb_btn_resume.GetId(), True)
+
       return
+
     elif self.run_aborted:
       self.gauge_process.Hide()
       font = self.sb.GetFont()

@@ -1,5 +1,9 @@
-from __future__ import absolute_import, division
+from __future__ import absolute_import, division, print_function
+
+import sys
+
 import boost.python
+import cctbx.crystal
 from cctbx import sgtbx # import dependency
 from cctbx.crystal_orientation import crystal_orientation # import dependency
 from dxtbx_model_ext import *
@@ -45,11 +49,15 @@ class CrystalAux(boost.python.injector, Crystal):
   def show(self, show_scan_varying=False, out=None):
     CrystalAux._show(self, show_scan_varying, out)
 
+  def get_crystal_symmetry(self, assert_is_compatible_unit_cell=True):
+    return cctbx.crystal.symmetry(
+      unit_cell=self.get_unit_cell(), space_group=self.get_space_group(),
+      assert_is_compatible_unit_cell=assert_is_compatible_unit_cell)
+
   @staticmethod
   def _show(self, show_scan_varying=False, out=None):
     from scitbx import matrix
     if out is None:
-      import sys
       out = sys.stdout
     uc = self.get_unit_cell().parameters()
     uc_sd = self.get_cell_parameter_sd()
@@ -105,7 +113,7 @@ class CrystalAux(boost.python.injector, Crystal):
           msg.append("    A = UB:    " + amat[0])
           msg.append("               " + amat[1])
           msg.append("               " + amat[2])
-    print >> out, "\n".join(msg)
+    print("\n".join(msg), file=out)
 
   def __str__(self):
     from cStringIO import StringIO
@@ -165,6 +173,16 @@ class CrystalAux(boost.python.injector, Crystal):
     if len(cov_B) != 0:
       xl_dict['B_covariance'] = cov_B
 
+    # Add in covariance of B at scan points if present
+    if crystal.num_scan_points > 0:
+      try:
+        cov_B_at_scan_points = tuple(
+          [tuple(crystal.get_B_covariance_at_scan_point(i))
+           for i in range(crystal.num_scan_points)])
+        xl_dict['B_covariance_at_scan_points'] = cov_B_at_scan_points
+      except RuntimeError:
+        pass
+
     return xl_dict
 
   def to_dict(crystal):
@@ -220,6 +238,14 @@ class CrystalAux(boost.python.injector, Crystal):
     except KeyError:
       pass
 
+    # Extract covariance of B at scan points, if present
+    cov_B_at_scan_points = d.get('B_covariance_at_scan_points')
+    if cov_B_at_scan_points is not None:
+      from scitbx.array_family import flex
+      cov_B_at_scan_points = flex.double(cov_B_at_scan_points).as_1d()
+      cov_B_at_scan_points.reshape(flex.grid(xl.num_scan_points ,9, 9))
+      xl.set_B_covariance_at_scan_points(cov_B_at_scan_points)
+
     return xl
 
 class MosaicCrystalKabsch2010Aux(CrystalAux, MosaicCrystalKabsch2010):
@@ -228,13 +254,12 @@ class MosaicCrystalKabsch2010Aux(CrystalAux, MosaicCrystalKabsch2010):
     CrystalAux._show(self, show_scan_varying, out)
 
     if out is None:
-      import sys
       out = sys.stdout
 
     msg = []
     msg.append("    Mosaicity:  %.6f"%self.get_mosaicity())
 
-    print >> out, "\n".join(msg)
+    print("\n".join(msg), file=out)
 
   def __str__(self):
     from cStringIO import StringIO
@@ -297,14 +322,13 @@ class MosaicCrystalSauter2014Aux(CrystalAux, MosaicCrystalSauter2014):
     CrystalAux._show(self, show_scan_varying, out)
 
     if out is None:
-      import sys
       out = sys.stdout
 
     msg = []
     msg.append("    Half mosaic angle (degrees):  %.6f"%self.get_half_mosaicity_deg())
     msg.append("    Domain size (Angstroms):  %.6f"%self.get_domain_size_ang())
 
-    print >> out, "\n".join(msg)
+    print("\n".join(msg), file=out)
 
   def get_A_as_sqr(self): # required for lunus
     from scitbx.matrix import sqr
@@ -477,6 +501,7 @@ class ExperimentListAux(boost.python.injector, ExperimentList):
     for e in self:
       obj = OrderedDict()
       obj['__id__'] = 'Experiment'
+      obj['identifier'] = e.identifier
       if e.beam is not None:
         obj['beam'] = find_index(blist, e.beam)
       if e.detector is not None:

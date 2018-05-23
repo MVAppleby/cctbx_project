@@ -9,7 +9,7 @@
 # FormatSMVADSC, customised for example on ALS beamline 8.2.2 from back in the
 # day which had it's own way of recording beam centre.
 
-from __future__ import absolute_import, division
+from __future__ import absolute_import, division, print_function
 
 from dxtbx.format.FormatSMVADSCSN import FormatSMVADSCSN
 
@@ -46,8 +46,14 @@ class FormatSMVADSCSN905(FormatSMVADSCSN):
     provided in the Mosflm coordinate frame.'''
 
     distance = float(self._header_dictionary['DISTANCE'])
-    beam_x = float(self._header_dictionary['DENZO_XBEAM'])
-    beam_y = float(self._header_dictionary['DENZO_YBEAM'])
+    if "DENZO_XBEAM" in self._header_dictionary: # Beamline group changed key=value tags several times
+      beam_x = float(self._header_dictionary['DENZO_XBEAM'])
+      beam_y = float(self._header_dictionary['DENZO_YBEAM'])
+    elif "DENZO_BEAM_CENTER_X" in self._header_dictionary:
+      beam_x = float(self._header_dictionary['DENZO_BEAM_CENTER_X'])
+      beam_y = float(self._header_dictionary['DENZO_BEAM_CENTER_Y'])
+    else:
+      raise Exception("cannot find beam center for detector S/N 905")
     pixel_size = float(self._header_dictionary['PIXEL_SIZE'])
     image_size = (float(self._header_dictionary['SIZE1']),
                   float(self._header_dictionary['SIZE2']))
@@ -99,5 +105,4 @@ if __name__ == '__main__':
   import sys
 
   for arg in sys.argv[1:]:
-    print FormatSMVADSC.understand(arg)
-
+    print(FormatSMVADSC.understand(arg))

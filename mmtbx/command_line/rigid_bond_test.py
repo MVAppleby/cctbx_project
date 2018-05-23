@@ -1,6 +1,5 @@
 
 from __future__ import division
-from libtbx.str_utils import make_header
 from libtbx.utils import Usage, Sorry
 import libtbx.phil
 import sys
@@ -16,7 +15,6 @@ restraints = None
 def run (args, out=sys.stdout) :
   if (len(args) == 0) or ("--help" in args) :
     raise Usage("mmtbx.rigid_bond_test model.pdb")
-  from mmtbx.monomer_library import pdb_interpretation
   import mmtbx.restraints
   import mmtbx.model
   import iotbx.phil
@@ -27,20 +25,12 @@ def run (args, out=sys.stdout) :
     cif_file_def="restraints")
   params = cmdline.work.extract()
   validate_params(params)
-  processed_pdb_file = pdb_interpretation.run(
-    args=[params.model] + params.restraints)
-  geometry = processed_pdb_file.geometry_restraints_manager(
-    show_energies = True)
-  restraints_manager = mmtbx.restraints.manager(
-    geometry = geometry,
-    normalization = True)
   model = mmtbx.model.manager(
-    xray_structure = processed_pdb_file.xray_structure(),
-    pdb_hierarchy = processed_pdb_file.all_chain_proxies.pdb_hierarchy,
-    restraints_manager = restraints_manager,
-    log                = out)
-  make_header("Rigid-bond test", out=out)
-  model.show_rigid_bond_test(out=out,
+    model_input = iotbx.pdb.input(file_name = params.model),
+    build_grm   = True)
+  model.get_xray_structure()
+  model.show_rigid_bond_test(
+    out=out,
     use_id_str=True,
     prefix="  ")
 

@@ -13,9 +13,12 @@ import iotbx.cif.model
 from libtbx.containers import OrderedDict, OrderedSet
 from libtbx.table_utils import wrap_always
 from cctbx import crystal
+from libtbx import group_args
+import collections
 import warnings
 import math
 import sys
+from iotbx.pdb.utils import all_chain_ids
 
 class pickle_import_trigger(object): pass
 
@@ -445,6 +448,61 @@ class _(boost.python.injector, ext.root, __hash_eq_mixin):
     self.get_overall_counts(result)
     return result
 
+  def occupancy_counts(self):
+    eps = 1.e-6
+    occ = self.atoms().extract_occ()
+    mean = flex.mean(occ)
+    negative = (occ<0).count(True)
+    zero_count = (flex.abs(occ)<eps).count(True)
+    zero_fraction = zero_count*100./occ.size()
+    equal_to_1_count = ((occ>(1.-eps)) & (occ<(1.+eps))).count(True)
+    equal_to_1_fraction = equal_to_1_count*100/occ.size()
+    between_0_and_1_count = ((occ>(0.+eps)) & (occ<(1.-eps))).count(True)
+    between_0_and_1_fraction = between_0_and_1_count*100/occ.size()
+    greater_than_1_count = (occ>(1.+eps)).count(True)
+    greater_than_1_fraction = greater_than_1_count*100./occ.size()
+    number_of_residues = len(list(self.residue_groups()))
+    number_of_alt_confs = 0
+    alt_loc_dist = collections.Counter()
+    for rg in self.residue_groups():
+      n_confs = len(rg.conformers())
+      if(n_confs > 1):
+        number_of_alt_confs += 1
+        alt_loc_dist[n_confs] += 1
+    return group_args(
+      mean                     = mean,
+      negative                 = negative,
+      zero_count               = zero_count,
+      zero_fraction            = zero_fraction,
+      equal_to_1_count         = equal_to_1_count,
+      equal_to_1_fraction      = equal_to_1_fraction,
+      between_0_and_1_count    = between_0_and_1_count,
+      between_0_and_1_fraction = between_0_and_1_fraction,
+      greater_than_1_count     = greater_than_1_count,
+      greater_than_1_fraction  = greater_than_1_fraction,
+      alt_conf_frac            = number_of_alt_confs*100/number_of_residues,
+      alt_loc_dist             = alt_loc_dist)
+
+  def composition(self):
+    asc = self.atom_selection_cache()
+    def rc(sel_str):
+      sel = asc.selection(sel_str)
+      return len(list(self.select(sel).residue_groups()))
+    sel_str_other = "not (water or nucleotide or protein)"
+    other_cnts = collections.Counter()
+    for rg in self.select(asc.selection(sel_str_other)).residue_groups():
+      for resname in rg.unique_resnames():
+        other_cnts[resname]+=1
+    return group_args(
+      n_atoms      = self.atoms().size(),
+      n_chains     = len(list(self.chains())),
+      n_protein    = rc("protein"),
+      n_nucleotide = rc("nucleotide"),
+      n_water      = rc("water"),
+      n_hd         = rc("element H or element D"),
+      n_other      = rc(sel_str_other),
+      other_cnts   = other_cnts)
+
   def show(self,
         out=None,
         prefix="",
@@ -591,7 +649,9 @@ class _(boost.python.injector, ext.root, __hash_eq_mixin):
 # REASON: This is not equivalent conversion. Hierarchy does not have a lot
 # of information pdb_input and cif_input should have. Therefore this
 # function should not be used at all to avoid confusion and having crippled
-# input objects.
+# input objects. Moreover, the use of mmtbx.model should eliminate the
+# need in this tranformation.
+# Currently used exclusively in Tom's code.
 
   def as_pdb_input (self, crystal_symmetry=None) :
     """
@@ -604,17 +664,6 @@ class _(boost.python.injector, ext.root, __hash_eq_mixin):
       lines=flex.split_lines(pdb_str))
     return pdb_inp
 
-  def as_cif_input(self, crystal_symmetry=None):
-    """
-    Generate corresponding mmcif input object.
-    """
-    import iotbx.cif.model
-    from iotbx.pdb import mmcif
-    cif_block = self.as_cif_block(crystal_symmetry=crystal_symmetry)
-    cif_model = iotbx.cif.model.cif()
-    cif_model['pdb_hierarchy'] = cif_block
-    cif_input = mmcif.cif_input(cif_object=cif_model)
-    return cif_input
 # END_MARKED_FOR_DELETION_OLEG
 
   def extract_xray_structure(self, crystal_symmetry=None) :
@@ -936,14 +985,18 @@ class _(boost.python.injector, ext.root, __hash_eq_mixin):
     auth_asym_ids = flex.std_string()
     label_asym_ids = flex.std_string()
     label_seq_id = 0
-    label_asym_id = ""
+    number_label_asym_id = 0
+    chain_ids = all_chain_ids()
     for model in self.models():
       model_id = model.id
       if model_id == '': model_id = '1'
       for chain in model.chains():
         auth_asym_id = chain.id
+        if chain.atoms()[0].segid.strip() != '':
+          auth_asym_id = chain.atoms()[0].segid.strip()
         if auth_asym_id.strip() == '': auth_asym_id = '.'
-        label_asym_id = increment_label_asym_id(label_asym_id)
+        label_asym_id = chain_ids[number_label_asym_id]
+        number_label_asym_id += 1
         for residue_group in chain.residue_groups():
           seq_id = residue_group.resseq.strip()
           label_seq_id += 1
@@ -1373,6 +1426,7 @@ class _(boost.python.injector, ext.root, __hash_eq_mixin):
         for residue_group in chain.residue_groups() :
           atom_groups = residue_group.atom_groups()
           assert (len(atom_groups) > 0)
+          cleanup_needed = True
           if always_keep_one_conformer :
             if (len(atom_groups) == 1) and (atom_groups[0].altloc == '') :
               continue
@@ -1395,6 +1449,12 @@ class _(boost.python.injector, ext.root, __hash_eq_mixin):
                 atom_group.altloc = ""
             if (len(residue_group.atom_groups()) == 0) :
               chain.remove_residue_group(residue_group=residue_group)
+              cleanup_needed = False
+          if cleanup_needed and residue_group.atom_groups_size() > 1:
+            ags = residue_group.atom_groups()
+            for i in range(len(ags)-1, 0, -1):
+              residue_group.merge_atom_groups(ags[0], ags[i])
+              residue_group.remove_atom_group(ags[i])
         if (len(chain.residue_groups()) == 0) :
           model.remove_chain(chain=chain)
     atoms = hierarchy.atoms()
@@ -2631,6 +2691,9 @@ class show_summary(input):
 # MARKED_FOR_DELETION_OLEG
 # Reason: functionality is moved to mmtbx.model and uses better all_chain_ids
 # function from iotbx.pdb.utils
+# Not until used in iotbx/pdb/__init__py: join_fragment_files:
+# GUI app: Combine PDB files
+# CL app: iotbx.pdb.join_fragment_files
 def suffixes_for_chain_ids(suffixes=Auto):
   if (suffixes is Auto):
     suffixes="123456789" \
@@ -2806,61 +2869,6 @@ def sites_diff (hierarchy_1,
     return hierarchy_new
   else :
     return deltas
-
-def expand_ncs (
-    pdb_hierarchy,
-    processed_mtrix_records,
-    write_segid=True,
-    log=None) :
-  pmr = processed_mtrix_records
-  if (log is None) : log = null_out()
-  assert len(pmr.r) == len(pmr.t)
-  if (len(pmr.r) == 0) :
-    raise Sorry("No MTRIX records found in PDB file!")
-  if (len(pdb_hierarchy.models()) > 1) :
-    raise Sorry("Multi-MODEL PDB files not supported.")
-  hierarchy_new = root()
-  model_new = model()
-  hierarchy_new.append_model(model_new)
-  for chain_ in pdb_hierarchy.models()[0].chains() :
-    chain_new = chain_.detached_copy()
-    atoms_tmp = chain_new.atoms()
-    if (write_segid) :
-      for atom in atoms_tmp :
-        atom.set_segid("0")
-    model_new.append_chain(chain_new)
-  print >> log, "Applying %d MTRIX records..." % len(pmr.r)
-  for rm, tv, sn, cpf in zip(pmr.r, pmr.t, pmr.serial_number,
-                             pmr.coordinates_present):
-    if (cpf) :
-      print >> log, "  skipping matrix %s, coordinates already present" % sn
-      continue
-    for chain_ in pdb_hierarchy.models()[0].chains() :
-      chain_new = chain_.detached_copy()
-      atoms_tmp = chain_new.atoms()
-      if (write_segid) :
-        for atom in atoms_tmp :
-          atom.set_segid("%s" % sn)
-      xyz = atoms_tmp.extract_xyz()
-      atoms_tmp.set_xyz(rm.elems * xyz + tv)
-      model_new.append_chain(chain_new)
-  return hierarchy_new
-
-def increment_label_asym_id(asym_id):
-  from string import ascii_uppercase
-  if len(asym_id) == 0:
-    return "A"
-  asym_id = list(asym_id)
-  for i in range(len(asym_id)):
-    if asym_id[i] == "Z":
-      asym_id[i] = "A"
-      if (i+1) == len(asym_id):
-        return "A" * (len(asym_id) + 1)
-    else:
-      while True:
-        j = ascii_uppercase.find(asym_id[i])
-        asym_id[i] = ascii_uppercase[j+1]
-        return "".join(asym_id)
 
 def substitute_atom_group(
     current_group,

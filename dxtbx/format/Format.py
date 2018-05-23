@@ -1,10 +1,3 @@
-#!/usr/bin/env python
-# Format.py
-#   Copyright (C) 2011 Diamond Light Source, Graeme Winter
-#
-#   This code is distributed under the BSD license, a copy of which is
-#   included in the root directory of this package.
-#
 # A top-level class to represent image formats which does little else but
 # (i) establish an abstract class for what needs to be implemented and
 # (ii) include the format registration code for any image formats which
@@ -12,14 +5,25 @@
 # from the X(component)Factories which will allow construction of e.g.
 # goniometers etc. from the headers and hence a format specific factory.
 
-from __future__ import absolute_import, division
+from __future__ import absolute_import, division, print_function
 
 import sys
 
-try:
-  import bz2
-except ImportError:
-  bz2 = None
+if sys.hexversion < 0x3040000:
+  # try Python3.3 backport bz2 pypi module first.
+  # this supports multiple compression streams.
+  # to install run  libtbx.pip install bz2file
+  try:
+    import bz2file
+    bz2 = bz2file
+  except ImportError:
+    bz2 = None
+
+if not bz2:
+  try:
+    import bz2
+  except ImportError:
+    bz2 = None
 
 try:
   import gzip
@@ -27,7 +31,6 @@ except ImportError:
   gzip = None
 
 import dxtbx.filecache_controller
-import exceptions
 
 # import access to all of the factories that we will be needing
 
@@ -220,7 +223,7 @@ class Format(object):
       #assert(isinstance(scan_instance, Scan) or isinstance(scan_instance, list))
       self._scan_instance = scan_instance
 
-    except exceptions.Exception:
+    except Exception:
       # FIXME ideally should not squash the errors here...
       import traceback
       traceback.print_exc()

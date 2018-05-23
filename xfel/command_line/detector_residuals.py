@@ -44,6 +44,13 @@ dot_size = 10
 panel_numbers = True
   .type = bool
   .help = Whether to show panel numbers on each panel
+verbose = True
+  .type = bool
+  .help = Whether to print statistics
+repredict_input_reflections = True
+  .type = bool
+  .help = Whether to use the input models to repredict reflection positions \
+          prior to making plots
 residuals {
   plot_max=None
     .type = float
@@ -131,15 +138,18 @@ plots {
     .help = Box plot of per-image RMSDs
   positional_displacements = True
     .type = bool
-    .help = Each reflection is plotted as observed on the detector. Three     \
-            plots are created: Overall: the color of the reflection is the    \
-            difference between the reflection's observed and predicted        \
-            locations.  Radial and transverse: the displacement vectors       \
-            between observed and predicted spot locations are split into      \
-            radial and transverse components, where radial is the component of\
-            the vector along the line from the refleciton to the beam center, \
-            and the transvrse component is the component of the diplacement   \
-            vector along the line orthogonal to the radial component.
+    .help = Each reflection is plotted as observed on the detector. The color \
+            of the reflection is the difference between the reflection's      \
+            observed and predicted locations.
+  include_radial_and_transverse = True
+    .type = bool
+    .help = Also plot radial and transverse displacements: the displacement   \
+            vectors between observed and predicted spot locations are split   \
+            into radial and transverse components, where radial is the        \
+            component of the vector along the line from the refleciton to the \
+            beam center, and the transvrse component is the component of the  \
+            diplacement vector along the line orthogonal to the radial        \
+            component.
   deltaXY_by_deltapsi = True
     .type = bool
     .help = For each reflection, compute the displacement vector deltaXY      \
@@ -221,6 +231,9 @@ plots {
 save_pdf = False
   .type = bool
   .help = Whether to show the plots or save as a multi-page pdf
+save_png = False
+  .type = bool
+  .help = Whether to show the plots or save as a series of pngs
 include scope xfel.command_line.cspad_detector_congruence.phil_scope
 ''', process_includes=True)
 
@@ -265,7 +278,7 @@ def setup_stats(detector, experiments, reflections, two_theta_only = False):
   reflections = tmp
   return reflections
 
-def get_unweighted_rmsd(reflections):
+def get_unweighted_rmsd(reflections, verbose=True):
   n = len(reflections)
   if n == 0:
     return 0
@@ -274,10 +287,11 @@ def get_unweighted_rmsd(reflections):
   weights = 1/reflections['xyzobs.mm.variance'].norms()
 
   un_rmsd = math.sqrt( flex.sum(reflections['difference_vector_norms']**2)/n)
-  print "Uweighted RMSD (mm)", un_rmsd
-
   w_rmsd = math.sqrt( flex.sum( weights*(reflections['difference_vector_norms']**2) )/flex.sum(weights))
-  print "Weighted RMSD (mm)", w_rmsd
+
+  if verbose:
+    print "Uweighted RMSD (mm)", un_rmsd
+    print "Weighted RMSD (mm)", w_rmsd
 
   return un_rmsd
 
@@ -339,6 +353,43 @@ class Script(DCScript):
       read_reflections=True,
       check_format=False,
       epilog=help_message)
+
+  def run(self):
+    ''' Parse the options. '''
+    from dials.util.options import flatten_experiments, flatten_reflections
+    # Parse the command line arguments
+    params, options = self.parser.parse_args(show_diff_phil=True)
+    self.params = params
+    if params.plots.all_plots:
+      for attr in dir(params.plots):
+        if attr.startswith('__'): continue
+        setattr(params.plots, attr, True)
+
+    experiments = flatten_experiments(params.input.experiments)
+
+    # Find all detector objects
+    detectors = experiments.detectors()
+
+    # Verify inputs
+    if len(params.input.reflections) == len(detectors) and len(detectors) > 1:
+      # case for passing in multiple images on the command line
+      assert len(params.input.reflections) == len(detectors)
+      reflections = flex.reflection_table()
+      for expt_id in xrange(len(detectors)):
+        subset = params.input.reflections[expt_id].data
+        subset['id'] = flex.int(len(subset), expt_id)
+        reflections.extend(subset)
+    else:
+      # case for passing in combined experiments and reflections
+      reflections = flatten_reflections(params.input.reflections)[0]
+
+    ResidualsPlotter(params, experiments, reflections).plot_all()
+
+class ResidualsPlotter(object):
+  def __init__(self, params, experiments, reflections):
+    self.params = params
+    self.experiments = experiments
+    self.reflections = reflections
 
   def get_normalized_colors(self, data, vmin=None, vmax=None):
     if vmax is None:
@@ -646,46 +697,23 @@ class Script(DCScript):
     return flex.vec2_double(((data.parts()[0] * xscale) - (data_min_x * xscale)),
                             ((data.parts()[1] * yscale) - (data_min_y * yscale))) + origin
 
-  def run(self):
-    ''' Parse the options. '''
-    from dials.util.options import flatten_experiments, flatten_reflections
-    # Parse the command line arguments
-    params, options = self.parser.parse_args(show_diff_phil=True)
-    self.params = params
-    if params.plots.all_plots:
-      for attr in dir(params.plots):
-        if attr.startswith('__'): continue
-        setattr(params.plots, attr, True)
+  def plot_all(self):
+    params = self.params
+    experiments = self.experiments
+    reflections = self.reflections
 
-    experiments = flatten_experiments(params.input.experiments)
+    detector = experiments.detectors()[0]
 
-    # Find all detector objects
-    detectors = experiments.detectors()
+    if params.repredict_input_reflections:
+      from dials.algorithms.refinement.prediction import ExperimentsPredictor
+      ref_predictor = ExperimentsPredictor(experiments, force_stills=experiments.all_stills())
+      reflections = ref_predictor(reflections)
 
-    # Verify inputs
-    if len(params.input.reflections) == len(detectors) and len(detectors) > 1:
-      # case for passing in multiple images on the command line
-      assert len(params.input.reflections) == len(detectors)
-      reflections = flex.reflection_table()
-      for expt_id in xrange(len(detectors)):
-        subset = params.input.reflections[expt_id].data
-        subset['id'] = flex.int(len(subset), expt_id)
-        reflections.extend(subset)
-    else:
-      # case for passing in combined experiments and reflections
-      reflections = flatten_reflections(params.input.reflections)[0]
-
-    detector = detectors[0]
-
-    from dials.algorithms.refinement.prediction import ExperimentsPredictor
-    ref_predictor = ExperimentsPredictor(experiments, force_stills=experiments.all_stills())
-    reflections = ref_predictor(reflections)
-
-    print "N reflections total:", len(reflections)
+    if params.verbose: print "N reflections total:", len(reflections)
     if params.residuals.exclude_outliers_from_refinement:
       reflections = reflections.select(reflections.get_flags(reflections.flags.used_in_refinement))
-      print "N reflections used in refinement:", len(reflections)
-      print "Reporting only on those reflections used in refinement"
+      if params.verbose: print "N reflections used in refinement:", len(reflections)
+      if params.verbose: print "Reporting only on those reflections used in refinement"
 
     if params.residuals.recompute_outliers:
       print "Performing outlier rejection on %d reflections"%len(reflections)
@@ -694,19 +722,19 @@ class Script(DCScript):
       rejection_occured = outlier(reflections)
       if rejection_occured:
         reflections = reflections.select(~reflections.get_flags(reflections.flags.centroid_outlier))
-        print "N reflections after outlier rejection:", len(reflections)
+        if params.verbose: print "N reflections after outlier rejection:", len(reflections)
       else:
-        print "No rejections found"
+        if params.verbose: print "No rejections found"
 
     if self.params.residuals.i_sigi_cutoff is not None:
       sel = (reflections['intensity.sum.value']/flex.sqrt(reflections['intensity.sum.variance'])) >= self.params.residuals.i_sigi_cutoff
       reflections = reflections.select(sel)
-      print "After filtering by I/sigi cutoff of %f, there are %d reflections left"%(self.params.residuals.i_sigi_cutoff,len(reflections))
+      if params.verbose: print "After filtering by I/sigi cutoff of %f, there are %d reflections left"%(self.params.residuals.i_sigi_cutoff,len(reflections))
 
-    if 'shoebox' in reflections:
+    if 'shoebox' in reflections and (params.repredict.enable or (params.show_plots and params.plots.reflection_energies)):
       reflections = reflection_wavelength_from_pixels(experiments, reflections)
       stats = flex.mean_and_variance(12398.4/reflections['reflection_wavelength_from_pixels'])
-      print "Mean energy: %.1f +/- %.1f"%(stats.mean(), stats.unweighted_sample_standard_deviation())
+      if params.verbose: print "Mean energy: %.1f +/- %.1f"%(stats.mean(), stats.unweighted_sample_standard_deviation())
       self.min_energy = stats.mean() - stats.unweighted_sample_standard_deviation()
       self.max_energy = stats.mean() + stats.unweighted_sample_standard_deviation()
 
@@ -744,7 +772,7 @@ class Script(DCScript):
         if params.repredict.refine_mode == 'per_experiment':
           refined_reflections = flex.reflection_table()
           for expt_id in xrange(len(experiments)):
-            print "*"*80, "EXPERIMENT", expt_id
+            if params.verbose: print "*"*80, "EXPERIMENT", expt_id
             refls = reflections.select(reflections['id']==expt_id)
             refls['id'] = flex.int(len(refls), 0)
             refls = refine_wavelengths(experiments[expt_id:expt_id+1], refls, init_mp, tag, dest,
@@ -759,7 +787,7 @@ class Script(DCScript):
           reflections = func(experiments, reflections, init_mp)
         reflections = predictions_from_per_reflection_energies(experiments, reflections, tag, dest)
         stats = flex.mean_and_variance(12398.4/reflections[tag])
-        print "Mean energy: %.1f +/- %.1f"%(stats.mean(), stats.unweighted_sample_standard_deviation())
+        if params.verbose: print "Mean energy: %.1f +/- %.1f"%(stats.mean(), stats.unweighted_sample_standard_deviation())
         reflections['delpsical.rad'] = reflections['delpsical.rad.%s'%dest]
         reflections['xyzcal.mm'] = reflections['xyzcal.mm.%s'%dest]
         reflections['xyzcal.px'] = reflections['xyzcal.px.%s'%dest]
@@ -767,7 +795,7 @@ class Script(DCScript):
     reflections['difference_vector_norms'] = (reflections['xyzcal.mm']-reflections['xyzobs.mm.value']).norms()
 
     n = len(reflections)
-    rmsd = get_unweighted_rmsd(reflections)
+    rmsd = get_unweighted_rmsd(reflections, params.verbose)
     print "Dataset RMSD (microns)", rmsd * 1000
 
     if params.tag is None:
@@ -917,10 +945,10 @@ class Script(DCScript):
     table_data.append(["Mean", "", "", "", "%8.1f"%flex.mean(pg_refls_count.as_double())])
 
     from libtbx import table_utils
-    print "Detector statistics.  Angles in degrees, RMSDs in microns"
-    print table_utils.format(table_data,has_header=2,justify='center',delim=" ")
+    if params.verbose: print "Detector statistics.  Angles in degrees, RMSDs in microns"
+    if params.verbose: print table_utils.format(table_data,has_header=2,justify='center',delim=" ")
 
-    self.histogram(reflections, r"%s$\Delta$XY histogram (mm)"%tag, plots = params.show_plots and params.plots.deltaXY_histogram)
+    self.histogram(reflections, r"%s$\Delta$XY histogram (mm)"%tag, plots = params.show_plots and params.plots.deltaXY_histogram, verbose = params.verbose)
 
     if params.show_plots:
       if self.params.tag is None:
@@ -930,12 +958,15 @@ class Script(DCScript):
       if params.plots.per_image_RMSDs_histogram: self.image_rmsd_histogram(reflections, tag, boxplot = params.plots.per_image_RMSDs_boxplot)
 
       # Plots! these are plots with callbacks to draw on individual panels
-      if params.plots.positional_displacements:           self.detector_plot_refls(detector, reflections, '%sOverall positional displacements (mm)'%tag,
-                                                                                   show=False, plot_callback=self.plot_obs_colored_by_deltas)
-      if params.plots.positional_displacements:           self.detector_plot_refls(detector, reflections, '%sRadial positional displacements (mm)'%tag,
-                                                                                   show=False, plot_callback=self.plot_obs_colored_by_radial_deltas)
-      if params.plots.positional_displacements:           self.detector_plot_refls(detector, reflections, '%sTransverse positional displacements (mm)'%tag,
-                                                                                   show=False, plot_callback=self.plot_obs_colored_by_transverse_deltas)
+      if params.plots.positional_displacements:
+        self.detector_plot_refls(detector, reflections, '%sOverall positional displacements (mm)'%tag,
+                                 show=False, plot_callback=self.plot_obs_colored_by_deltas)
+        if params.plots.include_radial_and_transverse:
+          self.detector_plot_refls(detector, reflections, '%sRadial positional displacements (mm)'%tag,
+                                   show=False, plot_callback=self.plot_obs_colored_by_radial_deltas)
+          self.detector_plot_refls(detector, reflections, '%sTransverse positional displacements (mm)'%tag,
+                                   show=False, plot_callback=self.plot_obs_colored_by_transverse_deltas)
+
       if params.plots.deltaXY_by_deltapsi:                self.detector_plot_refls(detector, reflections, r'%s$\Delta\Psi$'%tag,
                                                                                    show=False, plot_callback=self.plot_obs_colored_by_deltapsi, colorbar_units=r"$\circ$")
       if params.plots.deltaXY_by_reflection_energy:       self.detector_plot_refls(detector, reflections, '%sMean pixel energy'%tag,
@@ -1013,7 +1044,7 @@ class Script(DCScript):
 
         # calc the trendline
         z = np.polyfit(a.select(sel), b.select(sel), 1)
-        print 'y=%.7fx+(%.7f)'%(z[0],z[1])
+        if params.verbose: print 'y=%.7fx+(%.7f)'%(z[0],z[1])
 
       if params.plots.grouped_stats:
         # Plots with single values per panel
@@ -1084,6 +1115,14 @@ class Script(DCScript):
         for i in plt.get_fignums():
           pp.savefig(plt.figure(i))
         pp.close()
+      elif self.params.save_png:
+        if len(tag) == 0:
+          prefix = ""
+        else:
+          prefix = "%s_"%tag.strip()
+        for i in plt.get_fignums():
+          print "Saving figure", i
+          plt.figure(i).savefig("%sfig%02d.png"%(prefix, i), format='png', DPI=1200)
       else:
         plt.show()
 
@@ -1177,7 +1216,7 @@ class Script(DCScript):
                           r'$\Delta2\Theta RMSD (\circ)$'],
                          title)
 
-  def histogram(self, reflections, title, plots = True):
+  def histogram(self, reflections, title, plots = True, verbose = True):
     data = reflections['difference_vector_norms']
     n_slots = 100
     if self.params.residuals.histogram_max is None:
@@ -1190,19 +1229,19 @@ class Script(DCScript):
     sigma = mode = h.slot_centers()[list(h.slots()).index(flex.max(h.slots()))]
     mean = flex.mean(data)
     median = flex.median(data)
-    print "RMSD (microns)", rmsd * 1000
-    print "Histogram mode (microns):", mode * 1000
-    print "Overall mean (microns):", mean * 1000
-    print "Overall median (microns):", median * 1000
+    if verbose: print "RMSD (microns)", rmsd * 1000
+    if verbose: print "Histogram mode (microns):", mode * 1000
+    if verbose: print "Overall mean (microns):", mean * 1000
+    if verbose: print "Overall median (microns):", median * 1000
     mean2 = math.sqrt(math.pi/2)*sigma
     rmsd2 = math.sqrt(2)*sigma
-    print "Rayleigh Mean (microns)", mean2 * 1000
-    print "Rayleigh RMSD (microns)", rmsd2 * 1000
+    if verbose: print "Rayleigh Mean (microns)", mean2 * 1000
+    if verbose: print "Rayleigh RMSD (microns)", rmsd2 * 1000
 
     r = reflections['radial_displacements']
     t = reflections['transverse_displacements']
-    print "Overall radial RMSD (microns)", math.sqrt(flex.sum_sq(r)/len(r)) * 1000
-    print "Overall transverse RMSD (microns)", math.sqrt(flex.sum_sq(t)/len(t)) * 1000
+    if verbose: print "Overall radial RMSD (microns)", math.sqrt(flex.sum_sq(r)/len(r)) * 1000
+    if verbose: print "Overall transverse RMSD (microns)", math.sqrt(flex.sum_sq(t)/len(t)) * 1000
 
     if not plots: return
 
@@ -1253,15 +1292,19 @@ class Script(DCScript):
     plt.title("%sBoxplot of image RMSDs"%tag)
     ax.set_xlabel("RMSD (microns)")
 
-  def detector_plot_refls(self, detector, reflections, title, show=True, plot_callback=None, colorbar_units=None):
+  def detector_plot_refls(self, detector, reflections, title, show=True, plot_callback=None, colorbar_units=None, new_fig = True):
     """
     Use matplotlib to plot a detector, color coding panels according to callback
     @param detector detector reference detector object
     @param title title string for plot
     @param units_str string with a formatting statment for units on each panel
     """
-    fig = plt.figure()
-    ax = fig.add_subplot(111, aspect='equal')
+    if new_fig:
+      fig = plt.figure()
+      ax = fig.add_subplot(111, aspect='equal')
+    else:
+      fig = plt.gcf()
+      ax = plt.gca()
     max_dim = 0
     for panel_id, panel in enumerate(detector):
       # get panel coordinates

@@ -1,18 +1,11 @@
-#
-# datablock.py
-#
-#  Copyright (C) 2013 Diamond Light Source
-#
-#  Author: James Parkhurst
-#
-#  This code is distributed under the BSD license, a copy of which is
-#  included in the root directory of this package.
+from __future__ import absolute_import, division, print_function
 
-from __future__ import absolute_import, division
-import cPickle as pickle
+import collections
+import json
 
+import dxtbx.imageset
 from libtbx.utils import Sorry
-
+import six.moves.cPickle as pickle
 
 class DataBlock(object):
   ''' High level container for blocks of sweeps and imagesets. '''
@@ -84,25 +77,21 @@ class DataBlock(object):
 
   def iter_sweeps(self):
     ''' Iterate over sweep groups. '''
-    from dxtbx.imageset import ImageSweep
     for iset in self._imagesets:
-      if isinstance(iset, ImageSweep):
+      if isinstance(iset, dxtbx.imageset.ImageSweep):
         yield iset
 
   def iter_stills(self):
     ''' Iterate over still groups. '''
-    from dxtbx.imageset import ImageSweep
     for iset in self._imagesets:
-      if not isinstance(iset, ImageSweep):
+      if not isinstance(iset, dxtbx.imageset.ImageSweep):
         yield iset
 
   def unique_beams(self):
     ''' Iterate through unique beams. '''
-    from dxtbx.imageset import ImageSweep
-    from libtbx.containers import OrderedDict
-    obj = OrderedDict()
+    obj = collections.OrderedDict()
     for iset in self._imagesets:
-      if isinstance(iset, ImageSweep):
+      if isinstance(iset, dxtbx.imageset.ImageSweep):
         obj[iset.get_beam()] = None
       else:
         for i in xrange(len(iset)):
@@ -115,11 +104,9 @@ class DataBlock(object):
 
   def _unique_detectors_dict(self):
     ''' Returns an ordered dictionary of detector objects. '''
-    from dxtbx.imageset import ImageSweep
-    from libtbx.containers import OrderedDict
-    obj = OrderedDict()
+    obj = collections.OrderedDict()
     for iset in self._imagesets:
-      if isinstance(iset, ImageSweep):
+      if isinstance(iset, dxtbx.imageset.ImageSweep):
         obj[iset.get_detector()] = None
       else:
         for i in xrange(len(iset)):
@@ -132,11 +119,9 @@ class DataBlock(object):
 
   def unique_goniometers(self):
     ''' Iterate through unique goniometers. '''
-    from dxtbx.imageset import ImageSweep
-    from libtbx.containers import OrderedDict
-    obj = OrderedDict()
+    obj = collections.OrderedDict()
     for iset in self._imagesets:
-      if isinstance(iset, ImageSweep):
+      if isinstance(iset, dxtbx.imageset.ImageSweep):
         obj[iset.get_goniometer()] = None
       else:
         for i in xrange(len(iset)):
@@ -150,11 +135,9 @@ class DataBlock(object):
 
   def unique_scans(self):
     ''' Iterate through unique scans. '''
-    from dxtbx.imageset import ImageSweep
-    from libtbx.containers import OrderedDict
-    obj = OrderedDict()
+    obj = collections.OrderedDict()
     for iset in self._imagesets:
-      if isinstance(iset, ImageSweep):
+      if isinstance(iset, dxtbx.imageset.ImageSweep):
         obj[iset.get_scan()] = None
       else:
         for i in xrange(len(iset)):
@@ -168,9 +151,7 @@ class DataBlock(object):
 
   def to_dict(self):
     ''' Convert the datablock to a dictionary '''
-    from libtbx.containers import OrderedDict
     from itertools import groupby
-    from dxtbx.imageset import ImageSweep, ImageGrid
     from dxtbx.format.FormatMultiImage import FormatMultiImage
     from os.path import abspath
 
@@ -186,15 +167,15 @@ class DataBlock(object):
     s = list(self.unique_scans())
 
     # Create the data block dictionary
-    result = OrderedDict()
+    result = collections.OrderedDict()
     result['__id__'] = 'DataBlock'
     result['imageset'] = []
 
     # Loop through all the imagesets
     for iset in self._imagesets:
-      if isinstance(iset, ImageSweep):
+      if isinstance(iset, dxtbx.imageset.ImageSweep):
         if iset.reader().is_single_file_reader():
-          result['imageset'].append(OrderedDict([
+          result['imageset'].append(collections.OrderedDict([
               ('__id__', 'ImageSweep'),
               ('master',   abspath(iset.reader().master_path())),
               ("mask", abspath_or_none(iset.external_lookup.mask.filename)),
@@ -210,7 +191,7 @@ class DataBlock(object):
               ('params',   iset.params())
             ]))
         else:
-          result['imageset'].append(OrderedDict([
+          result['imageset'].append(collections.OrderedDict([
               ('__id__', 'ImageSweep'),
               ('template',   abspath(iset.get_template())),
               ("mask", abspath_or_none(iset.external_lookup.mask.filename)),
@@ -225,8 +206,8 @@ class DataBlock(object):
               ('params',   iset.params())
             ]))
       else:
-        imageset = OrderedDict()
-        if isinstance(iset, ImageGrid):
+        imageset = collections.OrderedDict()
+        if isinstance(iset, dxtbx.imageset.ImageGrid):
           identifier = "ImageGrid"
           imageset['__id__'] = "ImageGrid"
           imageset['grid_size'] = iset.get_grid_size()
@@ -234,7 +215,7 @@ class DataBlock(object):
           imageset['__id__'] = "ImageSet"
         image_list = []
         for i in xrange(len(iset)):
-          image_dict = OrderedDict()
+          image_dict = collections.OrderedDict()
           image_dict['filename'] = abspath(iset.get_path(i))
           image_dict["gain"] = abspath_or_none(iset.external_lookup.gain.filename)
           image_dict["pedestal"] = abspath_or_none(iset.external_lookup.pedestal.filename)
@@ -319,7 +300,7 @@ class FormatChecker(object):
         self._format_class = Registry.find(filename)
       self._format_class = self.check_child_formats(filename)
       if self._verbose:
-        print 'Using %s for %s' % (self._format_class.__name__, filename)
+        print('Using %s for %s' % (self._format_class.__name__, filename))
     except Exception:
       return None
     return self._format_class
@@ -349,7 +330,7 @@ class FormatChecker(object):
         group_format = fmt
       if self._verbose:
         if fmt is not None:
-          print 'Using %s for %s' % (fmt.__name__, filename)
+          print('Using %s for %s' % (fmt.__name__, filename))
     if len(group_fnames) > 0:
       yield group_format, group_fnames
 
@@ -372,19 +353,19 @@ class DataBlockTemplateImporter(object):
       except Exception:
         self.datablocks.append(DataBlock([iset]))
       if verbose:
-        print 'Added imageset to datablock %d' % (len(self.datablocks) - 1)
+        print('Added imageset to datablock %d' % (len(self.datablocks) - 1))
 
     # For each template do an import
     for template in templates:
       template = normpath(template)
       paths = sorted(locate_files_matching_template_string(template))
       if verbose:
-        print 'The following files matched the template string:'
+        print('The following files matched the template string:')
         if len(paths) > 0:
           for p in paths:
-            print ' %s' % p
+            print(' %s' % p)
         else:
-          print ' No files found'
+          print(' No files found')
 
       # Check if we've matched any filenames
       if len(paths) == 0:
@@ -403,7 +384,6 @@ class DataBlockTemplateImporter(object):
 
   def _create_imageset(self, format_class, template, filenames, **kwargs):
     ''' Create a multi file sweep or imageset. '''
-    from dxtbx.imageset import ImageSetFactory
     from dxtbx.sweep_filenames import template_string_number_index
 
     # Get the image range
@@ -436,7 +416,7 @@ class DataBlockTemplateImporter(object):
     image_range = (image_range[0], image_range[1]+1)
 
     # Create the sweep
-    imageset = ImageSetFactory.make_sweep(
+    imageset = dxtbx.imageset.ImageSetFactory.make_sweep(
       template, range(*image_range),
       format_class,
       b, d, g, s, format_kwargs=kwargs.get('format_kwargs'))
@@ -471,7 +451,7 @@ class DataBlockFilenameImporter(object):
       except Exception:
         self.datablocks.append(DataBlock([iset]))
       if verbose:
-        print 'Added imageset to datablock %d' % (len(self.datablocks) - 1)
+        print('Added imageset to datablock %d' % (len(self.datablocks) - 1))
 
     # Iterate through groups of files by format class
     find_format = FormatChecker(verbose=verbose)
@@ -483,7 +463,7 @@ class DataBlockFilenameImporter(object):
           imageset = self._create_single_file_imageset(fmt, filename,
                                                        format_kwargs=format_kwargs)
           append_to_datablocks(imageset)
-          if verbose: print 'Loaded file: %s' % filename
+          if verbose: print('Loaded file: %s' % filename)
       else:
         records = self._extract_file_metadata(
           fmt,
@@ -604,7 +584,6 @@ class DataBlockFilenameImporter(object):
   def _create_multi_file_imageset(self, format_class, records,
                                   format_kwargs=None):
     ''' Create a multi file sweep or imageset. '''
-    from dxtbx.imageset import ImageSetFactory
     from os.path import abspath
 
     # Make either an imageset or sweep
@@ -615,7 +594,7 @@ class DataBlockFilenameImporter(object):
       image_range = (image_range[0], image_range[1]+1)
 
       # Create the sweep
-      imageset = ImageSetFactory.make_sweep(
+      imageset = dxtbx.imageset.ImageSetFactory.make_sweep(
         abspath(records[0].template), range(*image_range),
         format_class,
         records[0].beam, records[0].detector,
@@ -631,7 +610,7 @@ class DataBlockFilenameImporter(object):
         filenames.append(r.filename)
 
       # make an imageset
-      imageset = ImageSetFactory.make_imageset(
+      imageset = dxtbx.imageset.ImageSetFactory.make_imageset(
         map(abspath, filenames),
         format_class,
         format_kwargs=format_kwargs)
@@ -647,7 +626,6 @@ class DataBlockFilenameImporter(object):
   def _create_single_file_imageset(self, format_class, filename,
                                    format_kwargs=None):
     ''' Create an imageset from a multi image file. '''
-    from dxtbx.imageset import ImageSet, ImageSweep
     from os.path import abspath
     if format_kwargs is None:
       format_kwargs = {}
@@ -668,24 +646,22 @@ class InvalidDataBlockError(RuntimeError):
 class DataBlockDictImporter(object):
   ''' A class to import a datablock from dictionary. '''
 
-  def __init__(self, obj, check_format=True):
+  def __init__(self, obj, check_format=True, directory=None):
     ''' Get the datablocks from the dictionary. '''
-    self.datablocks = self._load_datablocks(obj, check_format)
+    self.datablocks = self._load_datablocks(obj, check_format, directory)
 
-  def _load_datablocks(self, obj, check_format=True):
+  def _load_datablocks(self, obj, check_format=True, directory=None):
     ''' Create the datablock from a dictionary. '''
-    from libtbx.containers import OrderedDict
     from dxtbx.format.Registry import Registry
     from dxtbx.model import BeamFactory, DetectorFactory
     from dxtbx.model import GoniometerFactory, ScanFactory
     from dxtbx.serialize.filename import load_path
-    from dxtbx.imageset import ImageSetFactory, ImageGrid
     from dxtbx.format.image import ImageBool, ImageDouble
     from dxtbx.format.FormatMultiImage import FormatMultiImage
 
     # If we have a list, extract for each dictionary in the list
     if isinstance(obj, list):
-      return [self._load_datablocks(dd, check_format) for dd in obj]
+      return [self._load_datablocks(dd, check_format, directory) for dd in obj]
     elif not isinstance(obj, dict):
       raise InvalidDataBlockError("Unexpected datablock type {} instead of dict".format(type(obj)))
     # Make sure the id signature is correct
@@ -730,43 +706,43 @@ class DataBlockDictImporter(object):
       if ident == 'ImageSweep':
         beam, detector, gonio, scan = load_models(imageset)
         if "template" in imageset:
-          template = load_path(imageset['template'])
+          template = load_path(imageset['template'], directory=directory)
           i0, i1 = scan.get_image_range()
-          iset = ImageSetFactory.make_sweep(
+          iset = dxtbx.imageset.ImageSetFactory.make_sweep(
             template, range(i0, i1+1), None,
             beam, detector, gonio, scan, check_format,
             format_kwargs=format_kwargs)
           if 'mask' in imageset and imageset['mask'] is not None:
-            imageset['mask'] = load_path(imageset['mask'])
+            imageset['mask'] = load_path(imageset['mask'], directory=directory)
             iset.external_lookup.mask.filename = imageset['mask']
             if check_format:
               with open(imageset['mask']) as infile:
                 iset.external_lookup.mask.data = ImageBool(pickle.load(infile))
           if 'gain' in imageset and imageset['gain'] is not None:
-            imageset['gain'] = load_path(imageset['gain'])
+            imageset['gain'] = load_path(imageset['gain'], directory=directory)
             iset.external_lookup.gain.filename = imageset['gain']
             if check_format:
               with open(imageset['gain']) as infile:
                 iset.external_lookup.gain.data = ImageDouble(pickle.load(infile))
           if 'pedestal' in imageset and imageset['pedestal'] is not None:
-            imageset['pedestal'] = load_path(imageset['pedestal'])
+            imageset['pedestal'] = load_path(imageset['pedestal'], directory=directory)
             iset.external_lookup.pedestal.filename = imageset['pedestal']
             if check_format:
               with open(imageset['pedestal']) as infile:
                 iset.external_lookup.pedestal.data = ImageDouble(pickle.load(infile))
           if 'dx' in imageset and imageset['dx'] is not None:
-            imageset['dx'] = load_path(imageset['dx'])
+            imageset['dx'] = load_path(imageset['dx'], directory=directory)
             iset.external_lookup.dx.filename = imageset['dx']
             with open(imageset['dx']) as infile:
               iset.external_lookup.dx.data = ImageDouble(pickle.load(infile))
           if 'dy' in imageset and imageset['dy'] is not None:
-            imageset['dy'] = load_path(imageset['dy'])
+            imageset['dy'] = load_path(imageset['dy'], directory=directory)
             iset.external_lookup.dy.filename = imageset['dy']
             with open(imageset['dy']) as infile:
               iset.external_lookup.dy.data = ImageDouble(pickle.load(infile))
           iset.update_detector_px_mm_data()
         elif "master" in imageset:
-          template = load_path(imageset['master'])
+          template = load_path(imageset['master'], directory=directory)
           i0, i1 = scan.get_image_range()
           indices = imageset['images']
           assert min(indices) <= i0-1 and max(indices) >= i1-1
@@ -774,7 +750,7 @@ class DataBlockDictImporter(object):
             format_class = FormatMultiImage
           else:
             format_class = None
-          iset = ImageSetFactory.make_sweep(
+          iset = dxtbx.imageset.ImageSetFactory.make_sweep(
             template,
             list(range(i0, i1+1)),
             format_class  = format_class,
@@ -785,30 +761,30 @@ class DataBlockDictImporter(object):
             check_format  = check_format,
             format_kwargs = format_kwargs)
           if 'mask' in imageset and imageset['mask'] is not None:
-            imageset['mask'] = load_path(imageset['mask'])
+            imageset['mask'] = load_path(imageset['mask'], directory)
             iset.external_lookup.mask.filename = imageset['mask']
             if check_format:
               with open(imageset['mask']) as infile:
                 iset.external_lookup.mask.data = ImageBool(pickle.load(infile))
           if 'gain' in imageset and imageset['gain'] is not None:
-            imageset['gain'] = load_path(imageset['gain'])
+            imageset['gain'] = load_path(imageset['gain'], directory)
             iset.external_lookup.gain.filename = imageset['gain']
             if check_format:
               with open(imageset['gain']) as infile:
                 iset.external_lookup.gain.data = ImageDouble(pickle.load(infile))
           if 'pedestal' in imageset and imageset['pedestal'] is not None:
-            imageset['pedestal'] = load_path(imageset['pedestal'])
+            imageset['pedestal'] = load_path(imageset['pedestal'], directory)
             iset.external_lookup.pedestal.filename = imageset['pedestal']
             if check_format:
               with open(imageset['pedestal']) as infile:
                 iset.external_lookup.pedestal.data = ImageDouble(pickle.load(infile))
           if 'dx' in imageset and imageset['dx'] is not None:
-            imageset['dx'] = load_path(imageset['dx'])
+            imageset['dx'] = load_path(imageset['dx'], directory)
             iset.external_lookup.dx.filename = imageset['dx']
             with open(imageset['dx']) as infile:
               iset.external_lookup.dx.data = ImageDouble(pickle.load(infile))
           if 'dy' in imageset and imageset['dy'] is not None:
-            imageset['dy'] = load_path(imageset['dy'])
+            imageset['dy'] = load_path(imageset['dy'], directory)
             iset.external_lookup.dy.filename = imageset['dy']
             with open(imageset['dy']) as infile:
               iset.external_lookup.dy.data = ImageDouble(pickle.load(infile))
@@ -818,11 +794,11 @@ class DataBlockDictImporter(object):
         filenames = [image['filename'] for image in imageset['images']]
         indices = [image['image'] for image in imageset['images'] if 'image' in image]
         assert len(indices) == 0 or len(indices) == len(filenames)
-        iset = ImageSetFactory.make_imageset(
+        iset = dxtbx.imageset.ImageSetFactory.make_imageset(
           filenames, None, check_format, indices, format_kwargs=format_kwargs)
         if ident == "ImageGrid":
           grid_size = imageset['grid_size']
-          iset = ImageGrid.from_imageset(iset, grid_size)
+          iset = dxtbx.imageset.ImageGrid.from_imageset(iset, grid_size)
         for i, image in enumerate(imageset['images']):
           beam, detector, gonio, scan = load_models(image)
           iset.set_beam(beam, i)
@@ -830,30 +806,30 @@ class DataBlockDictImporter(object):
           iset.set_goniometer(gonio, i)
           iset.set_scan(scan, i)
         if 'mask' in imageset and imageset['mask'] is not None:
-          imageset['mask'] = load_path(imageset['mask'])
+          imageset['mask'] = load_path(imageset['mask'], directory)
           iset.external_lookup.mask.filename = imageset['mask']
           if check_format:
             with open(imageset['mask']) as infile:
               iset.external_lookup.mask.data = ImageBool(pickle.load(infile))
         if 'gain' in imageset and imageset['gain'] is not None:
-          imageset['gain'] = load_path(imageset['gain'])
+          imageset['gain'] = load_path(imageset['gain'], directory)
           iset.external_lookup.gain.filename = imageset['gain']
           if check_format:
             with open(imageset['gain']) as infile:
               iset.external_lookup.gain.data = ImageDouble(pickle.load(infile))
         if 'pedestal' in imageset and imageset['pedestal'] is not None:
-          imageset['pedestal'] = load_path(imageset['pedestal'])
+          imageset['pedestal'] = load_path(imageset['pedestal'], directory)
           iset.external_lookup.pedestal.filename = imageset['pedestal']
           if check_format:
             with open(imageset['pedestal']) as infile:
               iset.external_lookup.pedestal.data = ImageDouble(pickle.load(infile))
         if 'dx' in imageset and imageset['dx'] is not None:
-          imageset['dx'] = load_path(imageset['dx'])
+          imageset['dx'] = load_path(imageset['dx'], directory)
           iset.external_lookup.dx.filename = imageset['dx']
           with open(imageset['dx']) as infile:
             iset.external_lookup.dx.data = ImageDouble(pickle.load(infile))
         if 'dy' in imageset and imageset['dy'] is not None:
-          imageset['dy'] = load_path(imageset['dy'])
+          imageset['dy'] = load_path(imageset['dy'], directory)
           iset.external_lookup.dy.filename = imageset['dy']
           with open(imageset['dy']) as infile:
             iset.external_lookup.dy.data = ImageDouble(pickle.load(infile))
@@ -915,7 +891,7 @@ class DataBlockFactory(object):
     for filename in unhandled1:
       try:
         datablocks.extend(DataBlockFactory.from_serialized_format(filename))
-        if verbose: print 'Loaded datablocks(s) from %s' % filename
+        if verbose: print('Loaded datablocks(s) from %s' % filename)
       except Exception:
         unhandled.append(filename)
 
@@ -940,14 +916,13 @@ class DataBlockFactory(object):
       if isfile(f):
         filelist.append(f)
       elif isdir(f):
-        subdir = [ join(f, sf) for sf in listdir(f) if isfile(join(f, sf)) ]
-        subdir.sort()
+        subdir = sorted(join(f, sf) for sf in listdir(f) if isfile(join(f, sf)))
         filelist.extend(subdir)
         if verbose:
-          print "Added %d files from %s" % (len(subdir), f)
+          print("Added %d files from %s" % (len(subdir), f))
       else:
         if verbose:
-          print "Could not import %s: not a valid file or directory name" % f
+          print("Could not import %s: not a valid file or directory name" % f)
         if unhandled is not None:
           unhandled.append(f)
 
@@ -964,13 +939,13 @@ class DataBlockFactory(object):
     return importer.datablocks
 
   @staticmethod
-  def from_dict(obj, check_format=True):
+  def from_dict(obj, check_format=True, directory=None):
     ''' Create a datablock from a dictionary. '''
-    importer = DataBlockDictImporter(obj, check_format)
+    importer = DataBlockDictImporter(obj, check_format, directory)
     return importer.datablocks
 
   @staticmethod
-  def from_json(string, check_format=True):
+  def from_json(string, check_format=True, directory=None):
     ''' Decode a datablock from JSON string. '''
     from dxtbx.serialize.load import _decode_dict
     import json
@@ -978,17 +953,20 @@ class DataBlockFactory(object):
       json.loads(
         string,
         object_hook=_decode_dict),
-      check_format)
+      check_format=check_format,
+      directory=directory)
 
   @staticmethod
   def from_json_file(filename, check_format=True):
     ''' Decode a datablock from a JSON file. '''
     from os.path import dirname, abspath
-    from dxtbx.serialize.filename import temp_chdir
     filename = abspath(filename)
-    with temp_chdir(dirname(filename)):
-      with open(filename, 'r') as infile:
-        return DataBlockFactory.from_json(infile.read(), check_format)
+    directory = dirname(filename)
+    with open(filename, 'r') as infile:
+      return DataBlockFactory.from_json(
+        infile.read(),
+        check_format=check_format,
+        directory=directory)
 
   @staticmethod
   def from_pickle_file(filename):
@@ -1038,15 +1016,13 @@ class DataBlockFactory(object):
   @staticmethod
   def from_in_memory(images, indices=None):
     ''' Function to instantiate data block from in memory imageset. '''
-    from dxtbx.imageset import ImageSet, ImageSetData, MemReader
     return DataBlock([
-      ImageSet(
-        ImageSetData(
-          MemReader(images)
+      dxtbx.imageset.ImageSet(
+        dxtbx.imageset.ImageSetData(
+          dxtbx.imageset.MemReader(images)
         ),
         indices)])
 
-import json
 class AutoEncoder(json.JSONEncoder):
   def default(self, obj):
     import libtbx

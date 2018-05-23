@@ -1,8 +1,8 @@
-from __future__ import division
+from __future__ import absolute_import, division, print_function
 from libtbx import Auto
 from libtbx import group_args
-import sys, os
-op = os.path
+import os
+import sys
 
 def varnames(frames_back=0):
   f_code = sys._getframe(frames_back+1).f_code
@@ -19,7 +19,7 @@ class caller_location(object):
     return "%s(%d)" % (self.file_name, self.line_number)
 
 def check_point(frames_back=0):
-  print caller_location(frames_back=frames_back+1)
+  print(caller_location(frames_back=frames_back+1))
   sys.stdout.flush()
 
 def show_stack(
@@ -44,7 +44,7 @@ def show_stack(
   if (out == "return_lines"):
     return lines
   for line in lines:
-    print >> out, line
+    print(line, file=out)
 
 def show_stack_true_stderr():
   sys.__stdout__.flush()
@@ -54,7 +54,7 @@ def show_stack_true_stderr():
 def print_trace(frame, event, arg):
   if (event == "line"):
     sys.stderr.flush()
-    print "%s(%d)" % (frame.f_code.co_filename, frame.f_lineno)
+    print("%s(%d)" % (frame.f_code.co_filename, frame.f_lineno))
     sys.stdout.flush()
   return print_trace
 
@@ -65,8 +65,8 @@ def start_print_trace():
     show_stack(out=s)
     for line in s.getvalue().splitlines():
       if (line.find("pydoc.py") >= 0 and line.endswith(" cli")):
-        print "libtbx.introspection.start_print_trace():" \
-          " pydoc.cli() detected: no tracing"
+        print("libtbx.introspection.start_print_trace():" \
+          " pydoc.cli() detected: no tracing")
         return
   sys.settrace(print_trace)
 
@@ -161,9 +161,9 @@ class virtual_memory_info(proc_file_reader):
     lrss = prefix + "Resident set size:  "
     lsts = prefix + "Stack size:         "
     if (not show_max):
-      print >> out, lvms, fmt % vms
-      print >> out, lrss, fmt % rss
-      print >> out, lsts, fmt % sts
+      print(lvms, fmt % vms, file=out)
+      print(lrss, fmt % rss, file=out)
+      print(lsts, fmt % sts, file=out)
     else:
       self.virtual_memory_peak_size()
       vmi = virtual_memory_info
@@ -175,9 +175,9 @@ class virtual_memory_info(proc_file_reader):
         vms_what_max = "    exact max:"
       else:
         vms_what_max = "  approx. max:"
-      print >> out, lvms, fmt % vms, vms_what_max,     max_fmt % max_vms
-      print >> out, lrss, fmt % rss, "  approx. max:", max_fmt % max_rss
-      print >> out, lsts, fmt % sts, "  approx. max:", max_fmt % max_sts
+      print(lvms, fmt % vms, vms_what_max,     max_fmt % max_vms, file=out)
+      print(lrss, fmt % rss, "  approx. max:", max_fmt % max_rss, file=out)
+      print(lsts, fmt % sts, "  approx. max:", max_fmt % max_sts, file=out)
 
   def show_if_available(self, out=None, prefix="", show_max=False):
     if (self.proc_status is not None):
@@ -194,7 +194,7 @@ class virtual_memory_info(proc_file_reader):
 
 def get_mac_os_x_memory_total():
   cmd = "/usr/sbin/system_profiler"
-  if (not op.isfile(cmd)):
+  if not os.path.isfile(cmd):
     return None
   from libtbx import easy_run
   for line in easy_run.fully_buffered(
@@ -223,7 +223,7 @@ class machine_memory_info(proc_file_reader):
     self.proc_status = None
     self._memory_total = Auto
     self._memory_free = Auto
-    if (op.isfile("/proc/meminfo")):
+    if os.path.isfile("/proc/meminfo"):
       try:
         self.proc_status = open("/proc/meminfo").read()
       except IOError:
@@ -250,8 +250,8 @@ class machine_memory_info(proc_file_reader):
     mt = size_as_string_with_commas(self.memory_total())
     mf = size_as_string_with_commas(self.memory_free())
     fmt = "%%%ds" % max(len(mt), len(mf))
-    print >> out, prefix+"Memory total: ", fmt % mt
-    print >> out, prefix+"Memory free:  ", fmt % mf
+    print(prefix+"Memory total: ", fmt % mt, file=out)
+    print(prefix+"Memory free:  ", fmt % mf, file=out)
 
 _number_of_processors = Auto
 
@@ -275,7 +275,7 @@ def number_of_processors(return_value_if_unknown=None):
           _number_of_processors = n
     if (_number_of_processors is None):
       cpuinfo = "/proc/cpuinfo" # Linux
-      if (op.isfile(cpuinfo)):
+      if os.path.isfile(cpuinfo):
         n = 0
         for line in open(cpuinfo).read().splitlines():
           if (not line.startswith("processor")): continue
@@ -286,7 +286,7 @@ def number_of_processors(return_value_if_unknown=None):
           _number_of_processors = n
     if (_number_of_processors is None):
       cmd = "/usr/sbin/system_profiler" # Mac OS X
-      if (op.isfile(cmd)):
+      if os.path.isfile(cmd):
         keys = [
           "Total Number Of Cores: ",
           "Number Of CPUs: ",
@@ -314,7 +314,7 @@ def number_of_processors(return_value_if_unknown=None):
         else: _number_of_processors = n
     if (_number_of_processors is None):
       cmd = "/sbin/hinv" # IRIX
-      if (op.isfile(cmd)):
+      if os.path.isfile(cmd):
         from libtbx import easy_run
         for line in easy_run.fully_buffered(command=cmd).stdout_lines:
           if (line.endswith(" Processors")):
@@ -365,9 +365,9 @@ a.foo(1) @ test.py(13) main
         if str_args != "" : call_signature.append(str_args)
         if str_kwds != "" : call_signature.append(str_kwds)
         caller = sys._getframe(1)
-        print "%s.%s(%s) @ %s(%d) %s" % (O.__class__.__name__, f.__name__,
+        print("%s.%s(%s) @ %s(%d) %s" % (O.__class__.__name__, f.__name__,
           ", ".join(call_signature), caller.f_code.co_filename,
-          caller.f_lineno, caller.f_code.co_name)
+          caller.f_lineno, caller.f_code.co_name))
         sys.stdout.flush()
       return f(O, *args, **kwds)
     return log_wrapper
@@ -427,8 +427,8 @@ if (__name__ == "__main__"):
   assert exercise_varnames(1,2,3) == ("a", "b", "c")
   #
   assert _number_of_processors is Auto
-  print "number of processors:", number_of_processors(
-    return_value_if_unknown="unknown")
+  print("number of processors:", number_of_processors(
+    return_value_if_unknown="unknown"))
   assert _number_of_processors is not Auto
   assert number_of_processors() is _number_of_processors
   #
@@ -442,4 +442,4 @@ if (__name__ == "__main__"):
   #
   assert str(caller_location()).find("introspection") > 0
   #
-  print "OK"
+  print("OK")

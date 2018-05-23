@@ -45,7 +45,6 @@ import mmtbx.tls.tools
 from mmtbx.scaling import outlier_rejection
 import mmtbx.command_line.fmodel
 from cctbx import french_wilson
-import math
 import libtbx.callbacks # import dependency
 from libtbx.math_utils import ifloor, iceil
 from cctbx import maptbx
@@ -2110,452 +2109,6 @@ class fmodel_from_xray_structure(object):
       mtz_object = mtz_dataset.mtz_object()
       mtz_object.write(file_name = file_name)
 
-def rms_b_iso_or_b_equiv_bonded(restraints_manager, xray_structure,
-                                ias_manager = None):
-  result = None
-  ias_selection = None
-  if ias_manager is not None:
-    ias_selection = ias_manager.get_ias_selection()
-  if(restraints_manager is not None):
-    xrs_sel = xray_structure
-    if(ias_selection is not None):
-      xrs_sel = xray_structure.select(selection = ~ias_selection)
-    bond_proxies_simple, asu = restraints_manager.geometry.\
-        get_covalent_bond_proxies(sites_cart=xrs_sel.sites_cart())
-    u_isos = xrs_sel.extract_u_iso_or_u_equiv()
-    scatterers = xrs_sel.scatterers()
-    values = flex.double()
-    for proxy in bond_proxies_simple:
-      i_seq, j_seq = proxy.i_seqs
-      if(scatterers[i_seq].element_symbol() not in ["H", "D"] and
-         scatterers[j_seq].element_symbol() not in ["H", "D"]):
-        b_iso_i = adptbx.u_as_b(u_isos[i_seq])
-        b_iso_j = adptbx.u_as_b(u_isos[j_seq])
-        abs_diff_sq = abs(b_iso_i-b_iso_j)**2
-        values.append(abs_diff_sq)
-    if(values.size() == 0): return 0
-    result = math.sqrt(flex.sum(values) / values.size())
-  return result
-
-
-def _get_selections_around_residue(
-    n_atoms,
-    xrs,
-    res,
-    special_position_settings,
-    radius,):
-  sel = flex.size_t()
-  sel_res_mc = flex.size_t()
-  for a in res.atoms():
-    sel.append(a.i_seq)
-    if a.name.strip() in ["N", "CA", "C", "O"]:
-      sel_res_mc.append(a.i_seq)
-  bsel = flex.bool(n_atoms, False)
-  bsel.set_selected(sel, True)
-  selection_around_residue = special_position_settings.pair_generator(
-      sites_cart      = xrs.sites_cart(),
-      distance_cutoff = radius
-        ).neighbors_of(primary_selection = bsel)
-  bsel_around_no_mc = selection_around_residue.deep_copy()
-  bsel_around_no_mc.set_selected(sel_res_mc, False)
-  return sel, bsel_around_no_mc, selection_around_residue
-
-def _get_rotamers_evaluated(
-    pdb_hierarchy,
-    sel,
-    xrs,
-    crystal_gridding,
-    bsel_around_no_mc,
-    hd_sel,
-    res,
-    grm,
-    reind_dict,
-    mon_lib_srv,
-    map_data=None,
-    prefix="a"):
-  from cctbx.geometry_restraints import nonbonded_overlaps as nbo
-  assert xrs.scatterers().size() == pdb_hierarchy.atoms_size()
-  inf = []
-
-  special_position_settings = crystal.special_position_settings(
-    crystal_symmetry = xrs.crystal_symmetry())
-  # unconditional_general_position_flags = (
-  #         pdb_hierarchy.atoms().extract_occ() != 1)
-  site_symmetry_table = \
-      special_position_settings.site_symmetry_table(
-        sites_cart = xrs.sites_cart(),
-        unconditional_general_position_flags=None)
-  original_spi = site_symmetry_table.special_position_indices()
-  if len(original_spi) > 0:
-    return None
-
-  rotamer_iterator = mmtbx.rotamer.iterator(
-      mon_lib_srv         = mon_lib_srv,
-      residue             = res,
-      atom_selection_bool = None)
-  if rotamer_iterator is None:
-    return None
-  i = 0
-  sites_for_nb_overlaps = pdb_hierarchy.atoms().extract_xyz().deep_copy()
-  for rotamer, rotamer_sites_cart in rotamer_iterator:
-    assert rotamer_sites_cart.size() == res.atoms().size()
-    site_symmetry_table = \
-        special_position_settings.site_symmetry_table(
-          sites_cart = rotamer_sites_cart,
-          unconditional_general_position_flags=None)
-    spi = site_symmetry_table.special_position_indices()
-    if len(spi) > 0:
-      continue
-
-    for j, i_seq in enumerate(sel):
-      sites_for_nb_overlaps[reind_dict[i_seq]] = rotamer_sites_cart[j]
-    nb_overlaps = nbo.info(
-        geometry_restraints_manager=grm,
-        macro_molecule_selection=bsel_around_no_mc,
-        sites_cart=sites_for_nb_overlaps,
-        site_labels=None,
-        hd_sel=hd_sel,
-        do_only_macro_molecule=True,
-        check_for_unknown_pairs=False)
-    overlap_proxies = nb_overlaps.result.nb_overlaps_proxies_macro_molecule
-    summ = 0
-    for p in overlap_proxies:
-      d = list(p)
-      summ += d[3]-d[4]
-    map_cc = 0
-    rsr_target = 0
-    if map_data is not None:
-      rsr_target = maptbx.real_space_target_simple(
-          unit_cell   = xrs.crystal_symmetry().unit_cell(),
-          density_map = map_data,
-          sites_cart  = sites_for_nb_overlaps)
-      map_cc = 0
-    inf.append((i,
-        rotamer.id,
-        rotamer.frequency,
-        nb_overlaps.result.nb_overlaps_macro_molecule,
-        nb_overlaps.result.normalized_nbo_macro_molecule,
-        summ,
-        map_cc,
-        rsr_target,
-        rotamer_sites_cart))
-    i += 1
-  return sorted(inf, key=lambda x: (x[5], x[2])  )
-
-def _find_theta(ap1, ap2, cur_xyz, needed_xyz):
-  from mmtbx.building.loop_closure.ccd import ccd_python
-  f, s_home, r_norm, r_home = ccd_python._get_f_r_s(
-      axis_point_1=ap1,
-      axis_point_2=ap2,
-      moving_coor=cur_xyz,
-      fixed_coor=needed_xyz)
-  b = list(2*r_norm*(f.dot(r_home)))[0]
-  c = list(2*r_norm*(f.dot(s_home)))[0]
-  znam = math.sqrt(b*b+c*c)
-  sin_alpha = c/znam
-  cos_alpha = b/znam
-  alpha = math.atan2(sin_alpha, cos_alpha)
-  return math.degrees(alpha)
-
-def backrub_move(
-    prev_res,
-    cur_res,
-    next_res,
-    angle,
-    move_oxygens=False,
-    accept_worse_rama=False,
-    rotamer_manager=None,
-    rama_manager=None):
-  import boost.python
-  ext = boost.python.import_ext("mmtbx_validation_ramachandran_ext")
-  from mmtbx_validation_ramachandran_ext import rama_eval
-  from scitbx.matrix import rotate_point_around_axis
-  from mmtbx.conformation_dependent_library.multi_residue_class import ThreeProteinResidues, \
-      RestraintsRegistry
-
-  if abs(angle) < 1e-4:
-    return
-  if prev_res is None or next_res is None:
-    return
-  saved_res = [{},{},{}]
-  for i, r in enumerate([prev_res, cur_res, next_res]):
-    for a in r.atoms():
-      saved_res[i][a.name.strip()] = a.xyz
-  if rotamer_manager is None:
-    rotamer_manager = RotamerEval()
-  prev_ca = prev_res.find_atom_by(name=" CA ")
-  cur_ca = cur_res.find_atom_by(name=" CA ")
-  next_ca = next_res.find_atom_by(name=" CA ")
-  if prev_ca is None or next_ca is None or cur_ca is None:
-    return
-  atoms_to_move = []
-  atoms_to_move.append(prev_res.find_atom_by(name=" C  "))
-  atoms_to_move.append(prev_res.find_atom_by(name=" O  "))
-  for atom in cur_res.atoms():
-    atoms_to_move.append(atom)
-  atoms_to_move.append(next_res.find_atom_by(name=" N  "))
-  for atom in atoms_to_move:
-    assert atom is not None
-    new_xyz = rotate_point_around_axis(
-        axis_point_1 = prev_ca.xyz,
-        axis_point_2 = next_ca.xyz,
-        point        = atom.xyz,
-        angle        = angle,
-        deg          = True)
-    atom.xyz = new_xyz
-  if move_oxygens:
-    registry = RestraintsRegistry()
-    if rama_manager is None:
-      rama_manager = rama_eval()
-    tpr = ThreeProteinResidues(geometry=None, registry=registry)
-    tpr.append(prev_res)
-    tpr.append(cur_res)
-    tpr.append(next_res)
-    phi_psi_angles = tpr.get_phi_psi_angles()
-    rama_key = tpr.get_ramalyze_key()
-    ev_before = rama_manager.evaluate_angles(rama_key, phi_psi_angles[0], phi_psi_angles[1])
-    theta1 = _find_theta(
-        ap1 = prev_ca.xyz,
-        ap2 = cur_ca.xyz,
-        cur_xyz = prev_res.find_atom_by(name=" O  ").xyz,
-        needed_xyz = saved_res[0]["O"])
-    theta2 = _find_theta(
-        ap1 = cur_ca.xyz,
-        ap2 = next_ca.xyz,
-        cur_xyz = cur_res.find_atom_by(name=" O  ").xyz,
-        needed_xyz = saved_res[1]["O"])
-    for a in [prev_res.find_atom_by(name=" C  "),
-        prev_res.find_atom_by(name=" O  "),
-        cur_res.find_atom_by(name=" C  ")]:
-      new_xyz = rotate_point_around_axis(
-              axis_point_1 = prev_ca.xyz,
-              axis_point_2 = cur_ca.xyz,
-              point        = a.xyz,
-              angle        = theta1,
-              deg          = True)
-      a.xyz = new_xyz
-    for a in [cur_res.find_atom_by(name=" C  "),
-        cur_res.find_atom_by(name=" O  "),
-        next_res.find_atom_by(name=" N  ")]:
-      new_xyz = rotate_point_around_axis(
-              axis_point_1 = cur_ca.xyz,
-              axis_point_2 = next_ca.xyz,
-              point        = a.xyz,
-              angle        = theta2,
-              deg          = True)
-      a.xyz = new_xyz
-    phi_psi_angles = tpr.get_phi_psi_angles()
-    rama_key = tpr.get_ramalyze_key()
-    ev_after = rama_manager.evaluate_angles(rama_key, phi_psi_angles[0], phi_psi_angles[1])
-    if ev_before > ev_after and not accept_worse_rama:
-      for a in [prev_res.find_atom_by(name=" C  "),
-          prev_res.find_atom_by(name=" O  "),
-          cur_res.find_atom_by(name=" C  ")]:
-        new_xyz = rotate_point_around_axis(
-                axis_point_1 = prev_ca.xyz,
-                axis_point_2 = cur_ca.xyz,
-                point        = a.xyz,
-                angle        = -theta1,
-                deg          = True)
-        a.xyz = new_xyz
-      for a in [cur_res.find_atom_by(name=" C  "),
-          cur_res.find_atom_by(name=" O  "),
-          next_res.find_atom_by(name=" N  ")]:
-        new_xyz = rotate_point_around_axis(
-                axis_point_1 = cur_ca.xyz,
-                axis_point_2 = next_ca.xyz,
-                point        = a.xyz,
-                angle        = -theta2,
-                deg          = True)
-        a.xyz = new_xyz
-
-def sample_and_fix_rotamer(
-    residues,
-    i_res,
-    res,
-    pdb_hierarchy,
-    xrs,
-    map_data,
-    grm,
-    rotamer_manager,
-    crystal_gridding,
-    mon_lib_srv,
-    special_position_settings,
-    radius,
-    backrub_range,
-    log,
-    verbose):
-  from scitbx_array_family_flex_ext import reindexing_array
-  n_res = len(residues)
-  n_atoms = pdb_hierarchy.atoms_size()
-  hd_sel = xrs.hd_selection()
-
-  sample_backrub_angles = [0]
-  if backrub_range is not None:
-    inc = 3
-    f = 3
-    while f <= backrub_range:
-      sample_backrub_angles.append(-f)
-      sample_backrub_angles.append(f)
-      f += inc
-  all_inf = []
-  sel, bsel_around_no_mc, selection_around_residue = _get_selections_around_residue(
-      n_atoms,
-      xrs,
-      res,
-      special_position_settings,
-      radius)
-  r_a = list(reindexing_array(n_atoms,
-      selection_around_residue.iselection().as_int()))
-  reindexing_dict = {}
-  for i in sel:
-    reindexing_dict[i] = r_a[i]
-  pdb_selected = pdb_hierarchy.select(selection_around_residue)
-  bsel_around_no_mc_selected = bsel_around_no_mc.select(selection_around_residue)
-  hd_sel_selected = hd_sel.select(selection_around_residue)
-  grm_selected = grm.select(selection_around_residue)
-  for backrub_angle in sample_backrub_angles:
-    if verbose:
-      print >> log, "  Backrub angle:", backrub_angle
-    # make backrub, check ramachandran status
-    prev_res = None
-    if i_res > 0:
-      prev_res = residues[i_res-1]
-    next_res = None
-    if i_res+1 < n_res:
-      next_res = residues[i_res+1]
-    backrub_move(
-        prev_res = prev_res,
-        cur_res = res,
-        next_res = next_res,
-        angle=backrub_angle,
-        move_oxygens=False,
-        accept_worse_rama=False,
-        rotamer_manager=rotamer_manager)
-    # sample rotamers
-    s_inf = _get_rotamers_evaluated(
-        pdb_hierarchy=pdb_selected,
-        sel=sel,
-        xrs=xrs.select(selection_around_residue),
-        crystal_gridding=crystal_gridding,
-        bsel_around_no_mc=bsel_around_no_mc_selected,
-        hd_sel=hd_sel_selected,
-        res=res,
-        grm=grm_selected,
-        reind_dict=reindexing_dict,
-        mon_lib_srv=mon_lib_srv,
-        map_data=map_data,
-        prefix="%d" % backrub_angle)
-    if s_inf is None:
-      continue
-    all_inf.extend(s_inf)
-    all_inf = sorted(all_inf, key=lambda x: (x[5], x[2]))
-    if verbose:
-      for inf_elem in all_inf:
-        print >> log, "    ", inf_elem[:-1]
-    # see if need to continue to another backrubs
-    # pdb_hierarchy.write_pdb_file(
-    #     file_name="%s_%d.pdb" % (res.id_str()[7:], backrub_angle))
-    if verbose:
-      print >> log, "  The best clashscore 2:", all_inf[-1][5]
-    if all_inf[-1][5] > -0.01:
-      break
-    backrub_move(
-        prev_res = prev_res,
-        cur_res = res,
-        next_res = next_res,
-        angle=-backrub_angle,
-        move_oxygens=False,
-        accept_worse_rama=False,
-        rotamer_manager=rotamer_manager)
-  if len(all_inf) == 0:
-    return
-  if verbose:
-    print >> log, "Setting best available rotamer:", all_inf[-1][:-1]
-  res.atoms().set_xyz(all_inf[-1][-1])
-
-def fix_rotamer_outliers(
-    model,
-    map_data=None,
-    radius=5,
-    backrub_range=10,
-    non_outliers_to_check=None, # bool selection
-    verbose=False,
-    log=None):
-  import boost.python
-  boost.python.import_ext("scitbx_array_family_flex_ext")
-  if log is None:
-    log = sys.stdout
-  rotamer_manager = model.get_rotamer_manager()
-  get_class = iotbx.pdb.common_residue_names_get_class
-  if model.ncs_constraints_present():
-    pdb_hierarchy = model.get_master_hierarchy()
-    asc = pdb_hierarchy.atom_selection_cache()
-    xrs = pdb_hierarchy.extract_xray_structure()
-    grm = model.get_restraints_manager().select(model.get_master_selection()).geometry
-  else:
-    pdb_hierarchy = model.get_hierarchy()
-    asc = model.get_atom_selection_cache()
-    xrs = model.get_xray_structure()
-    grm = model.get_restraints_manager().geometry
-
-  assert pdb_hierarchy is not None
-  # assert grm is not None
-  assert xrs is not None
-  special_position_settings = crystal.special_position_settings(
-      crystal_symmetry = model.crystal_symmetry())
-
-  crystal_gridding = None
-  if map_data is not None:
-    crystal_gridding = maptbx.crystal_gridding(
-      unit_cell             = xrs.unit_cell(),
-      space_group_info      = xrs.space_group_info(),
-      pre_determined_n_real = map_data.accessor().all())
-
-  for m in pdb_hierarchy.models():
-    for chain in m.chains():
-      for conf in chain.conformers():
-        residues = conf.residues()
-        for i_res, res in enumerate(residues):
-          fix_residue = False
-          if verbose:
-            print >> log, "Working on", res.id_str(),
-          cl = get_class(res.resname)
-          # if cl not in ["common_amino_acid","modified_amino_acid"]:
-          #   fix_residue = False
-          if non_outliers_to_check is not None:
-            if non_outliers_to_check[res.atoms()[0].i_seq]:
-              fix_residue = True
-              if verbose:
-                print >> log, "Checking"
-          ev = rotamer_manager.evaluate_residue_2(res)
-          if ev == "OUTLIER":
-            fix_residue = True
-            if verbose:
-              print >> log, "OUTLIER"
-          if not fix_residue:
-            if verbose:
-              print >> log, "Skipping"
-          if fix_residue:
-            sample_and_fix_rotamer(
-                residues,
-                i_res,
-                res,
-                pdb_hierarchy,
-                xrs,
-                map_data,
-                grm,
-                rotamer_manager,
-                crystal_gridding,
-                model.get_mon_lib_srv(),
-                special_position_settings,
-                radius,
-                backrub_range,
-                log,
-                verbose)
-  model.set_sites_cart_from_hierarchy(multiply_ncs=True)
-  return pdb_hierarchy
-
 def switch_rotamers(
       pdb_hierarchy,
       mode,
@@ -2645,114 +2198,6 @@ def switch_rotamers(
                 residue_iselection, res)
   pdb_hierarchy.atoms().set_xyz(sites_cart_result)
   return pdb_hierarchy
-
-def seg_id_to_chain_id(pdb_hierarchy):
-  import string
-  two_character_chain_ids = []
-  segid_list = []
-  seg_dict = {}
-  for atom in pdb_hierarchy.atoms():
-    if atom.segid not in segid_list:
-      segid_list.append(atom.segid)
-  lower_letters = string.lowercase
-  upper_letters = string.uppercase
-  two_character_chain_ids = generate_two_character_ids()
-  for id in segid_list:
-    chainID = two_character_chain_ids[0]
-    seg_dict[id] = chainID
-    two_character_chain_ids.remove(chainID)
-  return seg_dict
-
-def find_bare_chains_with_segids(pdb_hierarchy):
-  bare_chains = False
-  for chain in pdb_hierarchy.chains():
-    if chain.id in ['', ' ', '  ']:
-      segid = None
-      for atom in chain.atoms():
-        if segid == None:
-          segid = atom.segid
-        elif segid != None and segid != atom.segid:
-          #require that each chain have a unique segid for this logic
-          return False
-      if segid != None and segid not in ['', ' ', '  ', '   ', '    ']:
-        bare_chains = True
-  return bare_chains
-
-def assign_chain_ids(pdb_hierarchy, seg_dict):
-  rename_txt = ""
-  for chain in pdb_hierarchy.chains():
-    if chain.id in ['', ' ', '  ']:
-      segid = None
-      for atom in chain.atoms():
-        if segid == None:
-          segid = atom.segid
-        elif segid != atom.segid:
-          print segid, atom.segid
-          raise Sorry("multiple segid values defined for chain")
-      new_id = seg_dict[segid]
-      chain.id = new_id
-      rename_txt = rename_txt + \
-      "segID %s renamed chain %s for Reduce N/Q/H analysis\n" % (segid, new_id)
-  return rename_txt
-
-def check_for_duplicate_chain_ids(pdb_hierarchy):
-  used_chain_ids = []
-  for model in pdb_hierarchy.models():
-    for chain in model.chains():
-      found_conformer = False
-      for conformer in chain.conformers():
-        if not conformer.is_protein() and not conformer.is_na():
-          continue
-        else:
-          found_conformer = True
-      if not found_conformer:
-        continue
-      cur_id = chain.id
-      if cur_id not in used_chain_ids:
-        used_chain_ids.append(cur_id)
-      else:
-        return True
-  return False
-
-def force_unique_chain_ids(pdb_hierarchy):
-  used_chain_ids = []
-  two_char = generate_two_character_ids()
-  #filter all used chains
-  for model in pdb_hierarchy.models():
-    for chain in model.chains():
-      cur_id = chain.id
-      if cur_id in two_char:
-        two_char.remove(cur_id)
-  #force unique chain ids
-  for model in pdb_hierarchy.models():
-    for chain in model.chains():
-      cur_id = chain.id
-      if cur_id not in used_chain_ids:
-        used_chain_ids.append(cur_id)
-      else:
-        new_id = two_char[0]
-        chain.id = new_id
-        two_char.remove(new_id)
-
-def generate_two_character_ids():
-  import string
-  singles = []
-  two_character_chain_ids = []
-  for ch in string.uppercase:
-    singles.append(ch)
-  for num in range(10):
-    ch = "%d" % num
-  for ch in string.lowercase:
-    singles.append(ch)
-    singles.append(ch)
-  for i in range(len(singles)):
-    ch = singles[i]
-    two_character_chain_ids.append(ch)
-  for i in range(len(singles)):
-    for j in range(len(singles)):
-      ch = singles[i]+singles[j]
-      two_character_chain_ids.append(ch)
-  return two_character_chain_ids
 
 def equivalent_sigma_from_cumulative_histogram_match(
       map_1, map_2, sigma_1, tail_cutoff=3, step=1, verbose=True):
@@ -2863,7 +2308,7 @@ class set_map_to_value(object):
 
 class shift_origin(object):
   def __init__(self, map_data, pdb_hierarchy=None, xray_structure=None,
-                     crystal_symmetry=None):
+                     crystal_symmetry=None, ncs_object=None):
     assert [pdb_hierarchy, xray_structure].count(None)==1
     if(pdb_hierarchy is not None):
       assert crystal_symmetry is not None
@@ -2877,23 +2322,32 @@ class shift_origin(object):
     self.pdb_hierarchy = pdb_hierarchy
     self.xray_structure = xray_structure
     self.crystal_symmetry = crystal_symmetry
+    self.ncs_object = ncs_object
     self.map_data = map_data
     # Shift origin if needed
     soin = maptbx.shift_origin_if_needed(
       map_data         = self.map_data,
+      ncs_object       = self.ncs_object,
       sites_cart       = sites_cart,
       crystal_symmetry = crystal_symmetry)
     self.map_data       = soin.map_data
+    self.ncs_object     = soin.ncs_object
+    self.ncs_object     = soin.ncs_object
     self.shift_cart     = soin.shift_cart
     self.shift_frac     = soin.shift_frac
     sites_cart_shifted  = soin.sites_cart
     if(self.xray_structure is not None):
       self.xray_structure.set_sites_cart(sites_cart_shifted)
+      self.xray_structure_box = self.xray_structure # NONSENSE XXX
     if([self.pdb_hierarchy,sites_cart_shifted].count(None)==0):
       self.pdb_hierarchy.atoms().set_xyz(sites_cart_shifted)
 
+  def get_original_cs(self):
+    return self.crystal_symmetry
+
   def shift_back(self, pdb_hierarchy):
     sites_cart = pdb_hierarchy.atoms().extract_xyz()
+    if(self.shift_cart is None): return
     shift_back = [-self.shift_cart[0], -self.shift_cart[1], -self.shift_cart[2]]
     sites_cart_shifted = sites_cart+\
       flex.vec3_double(sites_cart.size(), shift_back)
@@ -2933,18 +2387,46 @@ class extract_box_around_model_and_map(object):
                restrict_map_size=False,
                lower_bounds=None,
                upper_bounds=None,
+               extract_unique=None,
+               solvent_content=None,
+               resolution=None,
+               molecular_mass=None,
+               ncs_object=None,
+               symmetry=None,
                    ):
     adopt_init_args(self, locals())
     cs = xray_structure.crystal_symmetry()
     soo = shift_origin(map_data=self.map_data,
-      xray_structure=self.xray_structure)
+      xray_structure=self.xray_structure,
+      ncs_object=self.ncs_object)
     self.map_data = soo.map_data
+    self.ncs_object = soo.ncs_object
+    self.crystal_symmetry = soo.crystal_symmetry
     self.shift_cart = soo.shift_cart
     if(selection is None):
       xray_structure_selected = soo.xray_structure.deep_copy_scatterers()
     else:
       xray_structure_selected = soo.xray_structure.select(selection=selection)
     cushion = flex.double(cs.unit_cell().fractionalize((box_cushion,)*3))
+
+    if (extract_unique): # extracts just au density (not everything in the
+      #   box). Map is superimposed on self.map_data. We are going to use this
+      # box_map_data but everything else we will set with lower_bounds and
+      # upper_bounds
+      from scitbx.matrix import col
+      extract_unique_map_data,extract_unique_crystal_symmetry=\
+         self.get_map_from_segment_and_split()
+      lower_bounds=extract_unique_map_data.origin()
+      upper_bounds=tuple(
+        col(extract_unique_map_data.focus())-col((1,1,1)))
+      # shift the map so it is in the same position as the box map will be in
+      extract_unique_map_data.reshape(flex.grid(extract_unique_map_data.all()))
+
+      # Now box map is going to extract the same volume, but not the same
+      #  contents because extract_unique keeps just the density for the
+      #  molecule, not the surroundings.  We are going to replace the
+      #  map_box density with extract_unique_map_data below.
+
     if (keep_map_size):  # do not change anything...keep entire map
       self.pdb_outside_box_msg=""
       frac_min = [0.,0.,0.]
@@ -2995,6 +2477,21 @@ class extract_box_around_model_and_map(object):
       parameters=(abc[0],abc[1],abc[2],p[3],p[4],p[5]))
     self.box_crystal_symmetry = crystal.symmetry(
       unit_cell=new_unit_cell_box, space_group="P1")
+
+    if extract_unique: # use extract_unique_map_data in place of map_box
+      assert extract_unique_map_data.origin()==self.map_box.origin()
+      assert extract_unique_map_data.all()==self.map_box.all()
+      assert extract_unique_crystal_symmetry.is_similar_symmetry(
+         self.box_crystal_symmetry)
+      self.map_box=extract_unique_map_data
+
+    # Shift ncs_object to match the box
+    if self.ncs_object:
+      self.ncs_object=self.ncs_object.coordinate_offset(
+         secondary_shift_cart)
+    else:
+      self.ncs_object=None
+
     sp = crystal.special_position_settings(self.box_crystal_symmetry)
     # new xray_structure in the box
     sites_frac_new = xray_structure_selected.sites_frac()+secondary_shift_frac
@@ -3050,6 +2547,36 @@ class extract_box_around_model_and_map(object):
   def cut_and_copy_map(self,map_data=None):
     return maptbx.copy(map_data,self.gridding_first, self.gridding_last)
 
+  def get_map_from_segment_and_split(self):
+    from cctbx.maptbx.segment_and_split_map import run as segment_and_split_map
+    # NOTE: calling with shifted map data and ncs_object
+    #    (origin shifted to 0,0,0)
+    args=[]
+    args.append("write_files=False")
+    args.append("add_neighbors=False") # XXX perhaps allow user to set this
+    args.append("save_box_map_ncs_au=True")
+    args.append("density_select=False") # ZZZ
+    #self.ncs_object=None #ZZ
+    #args.append("check_ncs=True") # ZZZ
+    #args.append("symmetry=C7") # ZZZ
+    args.append("solvent_content=%s" %(self.solvent_content))
+    args.append("resolution=%s" %(self.resolution))
+    args.append("auto_sharpen=False")
+    if self.molecular_mass:
+      args.append("molecular_mass=%s" %self.molecular_mass)
+    if self.symmetry:
+      args.append("symmetry=%s" %self.symmetry)
+    # import params from s&s here and set them.  set write_files=false etc.
+
+    ncs_group_obj,remainder_ncs_group_obj,tracking_data =\
+      segment_and_split_map(args,
+          map_data=self.map_data,
+          crystal_symmetry=self.crystal_symmetry,
+          ncs_obj=self.ncs_object)
+    ncs_au_map_data=tracking_data.box_map_ncs_au_map_data
+    ncs_au_crystal_symmetry=tracking_data.box_map_ncs_au_crystal_symmetry
+    return ncs_au_map_data,ncs_au_crystal_symmetry
+
   def select_box(self,threshold,xrs=None,get_half_height_width=None):
     # Select box where data are positive (> threshold*max)
     map_data=self.map_data
@@ -3079,6 +2606,7 @@ class extract_box_around_model_and_map(object):
       value_list.append(new_map_data.as_1d().as_double().min_max_mean().max)
     y_min,y_max=self.get_range(value_list,threshold=threshold,
       get_half_height_width=get_half_height_width)
+
     value_list=flex.double()
     for k in xrange(0,all[2]):
       new_map_data = maptbx.copy(map_data,
@@ -3188,28 +2716,91 @@ Range for box:   %7.1f  %7.1f  %7.1f   to %7.1f  %7.1f  %7.1f""" %(
     if (n_tot-1-i_high)/n_tot<keep_near_ends_frac: i_high=n_tot-1
     return i_low/n_tot,i_high/n_tot
 
-  def write_xplor_map(self, file_name="box.xplor"):
+  def write_xplor_map(self, file_name="box.xplor",shift_back=None):
+    # write out xplor map on same grid as ccp4 map (0 to focus-1)
+    from scitbx.matrix import col
+    if shift_back:
+      map_data=self.shift_map_back(self.map_box)
+    else:
+      map_data=self.map_box
+
     gridding = iotbx.xplor.map.gridding(
-      n     = self.map_box.focus(),
-      first = (0,0,0),
-      last  = self.map_box.focus())
+        n     = map_data.all(),
+        first = map_data.origin(),
+        last  = tuple(col(map_data.focus())-col((1,1,1))))
+
+
     iotbx.xplor.map.writer(
       file_name          = file_name,
-      is_p1_cell         = True,
+      is_p1_cell         = None, # XXX temporary flag allowing any cell
       title_lines        = ['Map in box',],
       unit_cell          = self.xray_structure_box.unit_cell(),
       gridding           = gridding,
-      data               = self.map_box.as_double(),
+      data               = map_data.as_double(),
       average            = -1,
       standard_deviation = -1)
 
-  def write_ccp4_map(self, file_name="box.ccp4"):
+  def origin_shift_grid_units(self,unit_cell=None,
+       reverse=False):
+    # Get origin shift in grid units from shift_cart
+    from scitbx.matrix import col
+    cell=self.xray_structure_box.crystal_symmetry().unit_cell().parameters()[:3]
+    origin_shift_grid=[]
+    for s,c,a in zip(self.shift_cart,cell,self.map_box.all()):
+      if s<0:
+        delta=-0.5
+      else:
+        delta=0.5
+      origin_shift_grid.append( int(delta+ a*s/c))
+    if reverse:
+      return list(-col(origin_shift_grid))
+    else:
+      return origin_shift_grid
+
+  def shift_sites_cart_back(self,sites_cart):
+    # Shift sites from map_box cell to original coordinate system
+    # Normal situation: cut out piece of cell so shift_cart negative;
+    #  box_sites_cart more negative than sites_cart;
+    #  put back with (-shift_cart) which moves sites to more positive values.
+    from scitbx.matrix import col
+    return sites_cart-col(self.shift_cart)
+
+  def shift_map_coeffs_back(self,map_coeffs):
+    # Shift map coeffs from map_box cell to original coordinate system
+    # Apply phase shift corresponding to moving coordinates by self.shift_cart
+    # Note resulting map coeffs are still for the box cell (not original cell).
+    #  They superimpose on the result of shift_sites_cart_back but only
+    #  within the volume of the map_box cell in the original coordinate system
+
+    from scitbx.matrix import col
+    return map_coeffs.translational_shift(
+          self.box_crystal_symmetry.unit_cell().fractionalize(
+          -col(self.shift_cart)), deg=False)
+
+  def shift_map_back(self,map_data):
+    # Shift map from map_box cell to original coordinate system
+    #  Note this map only applies in the region of the map_box cell (the
+    #   map may be repeated in space but only one copy is valid).
+    # The dimensions of this map are the same as the box map.
+    from scitbx.matrix import col
+    new_origin=self.origin_shift_grid_units(reverse=True)
+    new_all=list(col(self.map_box.all())+col(new_origin))
+    shifted_map_data = map_data.deep_copy()
+    shifted_map_data.resize(flex.grid(new_origin,new_all))
+    return shifted_map_data
+
+  def write_ccp4_map(self, file_name="box.ccp4",shift_back=False):
     from iotbx import ccp4_map
+    assert tuple(self.map_box.origin())==(0,0,0)
+    if shift_back:
+      map_data=self.shift_map_back(self.map_box)
+    else:
+      map_data = self.map_box
     ccp4_map.write_ccp4_map(
       file_name      = file_name,
       unit_cell      = self.xray_structure_box.unit_cell(),
       space_group    = self.xray_structure_box.space_group(),
-      map_data       = self.map_box.as_double(),
+      map_data       = map_data,
       labels=flex.std_string([" "]))
 
   def box_map_coefficients_as_fft_map(self, d_min, resolution_factor):
@@ -3218,15 +2809,17 @@ Range for box:   %7.1f  %7.1f  %7.1f   to %7.1f  %7.1f  %7.1f""" %(
     fft_map.apply_sigma_scaling()
     return fft_map
 
-  def map_coefficients(self, d_min, resolution_factor, file_name="box.mtz"):
-    box_map_coeffs = self.box_map_coefficients(d_min = d_min)
+  def map_coefficients(self, d_min, resolution_factor, file_name="box.mtz",
+     shift_back=None):
+    box_map_coeffs = self.box_map_coefficients(d_min = d_min,
+      shift_back=shift_back)
     if(file_name is not None):
       mtz_dataset = box_map_coeffs.as_mtz_dataset(column_root_label="BoxMap")
       mtz_object = mtz_dataset.mtz_object()
       mtz_object.write(file_name = file_name)
     return box_map_coeffs
 
-  def box_map_coefficients(self, d_min):
+  def box_map_coefficients(self, d_min, shift_back=None):
     from scitbx import fftpack
     fft = fftpack.real_to_complex_3d([i for i in self.map_box.all()])
     map_box = maptbx.copy(
@@ -3248,6 +2841,10 @@ Range for box:   %7.1f  %7.1f  %7.1f   to %7.1f  %7.1f  %7.1f""" %(
       anomalous_flag=False,
       indices=box_structure_factors.miller_indices(),
       ).array(data=box_structure_factors.data()/n)
+
+    if shift_back:  # apply phase shift to map coefficients for origin shift
+       box_map_coeffs=self.shift_map_coeffs_back(box_map_coeffs)
+
     return box_map_coeffs
 
 
@@ -3387,6 +2984,44 @@ class f_000(object):
       f_000 = unit_cell_volume*mean_solvent_density
     self.f_000 = f_000
     self.solvent_fraction = solvent_fraction
+
+def check_and_set_crystal_symmetry(
+      models=[],
+      map_inps=[],
+      miller_arrays=[],
+      crystal_symmetry=None,
+      absolute_angle_tolerance =1.e-2,
+      absolute_length_tolerance=1.e-2):
+  # XXX This should go into a central place
+  # XXX Check map gridding here!
+  for it in [models, map_inps, miller_arrays]:
+    assert isinstance(it, (list, tuple))
+  def remove_none(x):
+    result = []
+    for it in x:
+      if(it is not None): result.append(it)
+    return result
+  models        = remove_none(models)
+  map_inps      = remove_none(map_inps)
+  miller_arrays = remove_none(miller_arrays)
+  crystal_symmetry = crystal.select_crystal_symmetry(
+    from_parameter_file       = crystal_symmetry,
+    from_coordinate_files     = [m.crystal_symmetry() for m in models],
+    from_reflection_files     = [m.crystal_symmetry() for m in
+                                 map_inps+miller_arrays],
+    enforce_similarity        = True,
+    absolute_angle_tolerance  = absolute_angle_tolerance,
+    absolute_length_tolerance = absolute_length_tolerance)
+  for model in models:
+    cs = model.crystal_symmetry()
+    if(cs is None or cs.is_empty()):
+      model.set_crystal_symmetry_if_undefined(crystal_symmetry)
+  if(len(map_inps)>1):
+    m0 = map_inps[0].map_data()
+    for m in map_inps[1:]:
+      if(m is None): continue
+      maptbx.assert_same_gridding(map_1=m0, map_2=m.map_data())
+  return crystal_symmetry
 
 class detect_hydrogen_nomenclature_problem (object) :
   """

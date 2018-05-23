@@ -24,8 +24,10 @@ from libtbx.str_utils import make_header, make_sub_header, format_value
 from libtbx import slots_getstate_setstate, \
     slots_getstate_setstate_default_initializer
 from libtbx.utils import null_out, to_str, Sorry
+import iotbx.pdb
 import libtbx.load_env
 import libtbx.phil
+import mmtbx.model
 import os.path
 import sys
 
@@ -74,15 +76,11 @@ class molprobity (slots_getstate_setstate) :
   geometry will also be displayed.  Passing an fmodel object enables the
   re-calculation of R-factors and real-space correlation.
 
-  :param pdb_hierarchy: model PDB hierarchy (required)
-  :param xray_structure: model X-ray scatterers
+  :param model: model object (required)
   :param fmodel: mmtbx.f_model.manager object, after bulk solvent/scaling
   :param fmodel_neutron: separate Fmodel manager for neutron data (used in
                          phenix.refine for join X/N refinement)
-  :param geometry_restraints_manager: geometry restraints extracted by \
-                                      mmtbx.monomer_library.pdb_interpretation
   :param sequences: parsed sequence objects (from iotbx.bioinformatics)
-  :param crystal_symmetry: cctbx.crystal.symmetry object
   :param flags: object containing boolean flags for analyses to perform
   :param header_info: extracted statistics from PDB file header
   :param raw_data: input data before French-Wilson treatment, etc.
@@ -135,7 +133,9 @@ class molprobity (slots_getstate_setstate) :
     "model_statistics_geometry",
     "model_statistics_geometry_result",
     "polygon_stats",
-    "wilson_b"
+    "wilson_b",
+    "hydrogens",
+    "model"
   ]
 
   # backwards compatibility with saved results
@@ -145,18 +145,15 @@ class molprobity (slots_getstate_setstate) :
       if not hasattr(self, name) : setattr(self, name, None)
 
   def __init__ (self,
-      pdb_hierarchy,
-      xray_structure=None,
+      model,
+      pdb_hierarchy=None,   # keep for mmtbx.validation_summary (multiple models)
       fmodel=None,
       fmodel_neutron=None,
-      geometry_restraints_manager=None,
-      crystal_symmetry=None,
       sequences=None,
       flags=None,
       header_info=None,
       raw_data=None,
       unmerged_data=None,
-      all_chain_proxies=None,
       keep_hydrogens=True,
       nuclear=False,
       save_probe_unformatted_file=None,
@@ -174,6 +171,22 @@ class molprobity (slots_getstate_setstate) :
     assert rotamer_library == "8000", "data_version given to RotamerEval not recognized."
     for name in self.__slots__ :
       setattr(self, name, None)
+
+    # use objects from model
+    self.model = model
+    if (self.model is not None):
+      pdb_hierarchy = self.model.get_hierarchy()
+      xray_structure = self.model.get_xray_structure()
+      geometry_restraints_manager = self.model.get_restraints_manager().geometry
+      crystal_symmetry = self.model.crystal_symmetry()
+      all_chain_proxies = self.model.all_chain_proxies
+    else:
+      assert (pdb_hierarchy is not None)
+      xray_structure = None
+      geometry_restraints_manager = None
+      crystal_symmetry = None
+      all_chain_proxies = None
+
     # very important - the i_seq attributes may be extracted later
     pdb_hierarchy.atoms().reset_i_seq()
     self.pdb_hierarchy = pdb_hierarchy
@@ -198,8 +211,7 @@ class molprobity (slots_getstate_setstate) :
       if (flags.real_space):
         self.real_space = experimental.real_space(
           fmodel=None,
-          pdb_hierarchy=pdb_hierarchy,
-          crystal_symmetry=self.crystal_symmetry,
+          model=self.model,
           cc_min=min_cc_two_fofc,
           molprobity_map_params=map_params.input.maps)
       if (flags.waters):
@@ -276,8 +288,8 @@ class molprobity (slots_getstate_setstate) :
       if (not use_maps): # if maps are used, keep previous results
         if (flags.real_space):
           self.real_space = experimental.real_space(
+            model=model,
             fmodel=fmodel,
-            pdb_hierarchy=pdb_hierarchy,
             cc_min=min_cc_two_fofc)
         if (flags.waters) :
           self.waters = waters.waters(
@@ -321,6 +333,16 @@ class molprobity (slots_getstate_setstate) :
     elif (fmodel_neutron is not None):
       self.wilson_b = fmodel_neutron.wilson_b()
 
+    # validate hydrogens
+    self.hydrogens = None
+    if ( (self.model is not None) and (self.model.has_hd) ):
+      # import here to avoid circular import issues
+      from mmtbx.hydrogens.validate_H import validate_H, validate_H_results
+      hydrogens = validate_H(model, nuclear)
+      hydrogens.validate_inputs()
+      hydrogens.run()
+      self.hydrogens = validate_H_results(hydrogens.get_results())
+
     # write probe file if needed (CLI and GUI)
     if (save_probe_unformatted_file is not None):
       pcm = self.clashes.probe_clashscore_manager
@@ -354,6 +376,10 @@ class molprobity (slots_getstate_setstate) :
     if (self.restraints is not None) :
       make_header("Geometry restraints", out=out)
       self.restraints.show(out=out, prefix="  ")
+    if (self.hydrogens is not None):
+      make_header("Hydrogen validation", out=out)
+      self.hydrogens.print_results(prefix='  ', log=out)
+
     make_header("Molprobity validation", out=out)
     self.model_statistics_geometry.show(log=out, prefix="  ", lowercase=True)
     if (self.nqh_flips is not None) :
@@ -697,22 +723,12 @@ class summary (slots_getstate_setstate_default_initializer) :
     if (show_percentiles) :
       perc_attr = ["clashscore", "mpscore", "r_work", "r_free"]
       stats = dict([ (name, getattr(self, name)) for name in perc_attr ])
-      from mmtbx.polygon import get_statistics_percentiles
-      percentiles = get_statistics_percentiles(self.d_min, stats)
     for k, name in enumerate(self.__slots__) :
       format = "%%s%%-%ds = %%s" % maxlen
       if (k < 3) :
         format += " %%"
       percentile_info = ""
-      if (show_percentiles) :
-        percentile = percentiles.get(name, None)
-        if (percentile is not None) :
-          format += " (percentile: %s)"
-          percentile_info = "%.1f" % percentile
-        else :
-          format += "%s"
-      else :
-        format += "%s"
+      format += "%s"
       value = getattr(self, name)
       if (value is not None) :
         print >> out, format % (prefix, self.labels[k], fs(self.formats[k],

@@ -5,7 +5,7 @@ Created     : 8/15/2016
 Description : Command line for solving indexing ambiguity
 '''
 import numpy as np
-from libtbx.easy_mp import pool_map
+from libtbx.easy_mp import parallel_map
 from prime.index_ambiguity.mod_indexing_ambiguity import indamb_handler
 import cPickle as pickle
 from prime.index_ambiguity.mod_kmeans import kmeans_handler
@@ -64,7 +64,8 @@ class indexing_ambiguity_handler(object):
     #if solution pickle is given, return the file name
     if iparams.indexing_ambiguity.index_basis_in is not None:
       if iparams.indexing_ambiguity.index_basis_in.endswith('.pickle'):
-        return iparams.indexing_ambiguity.index_basis_in, iparams
+        sol_pickle = pickle.load(open(iparams.indexing_ambiguity.index_basis_in, "rb"))
+        return sol_pickle, iparams
     #read all integration pickles
     frame_files = read_pickles(iparams.data)
     n_frames = len(frame_files)
@@ -89,7 +90,7 @@ class indexing_ambiguity_handler(object):
           return None, iparams
         else:
           frames = [(i, frame_files[i], iparams, miller_array_ref) for i in range(n_frames)]
-          cc_results = pool_map(
+          cc_results = parallel_map(
             iterable=frames,
             func=solve_with_mtz_mproc,
             processes=iparams.n_processors)
@@ -98,13 +99,13 @@ class indexing_ambiguity_handler(object):
             pickle_filename, index_basis = result
             sol_pickle[pickle_filename] = index_basis
           pickle.dump(sol_pickle, open(sol_fname,"wb"))
-          return sol_fname, iparams
+          return sol_pickle, iparams
     #*************************************************
     #solve with Brehm & Diederichs - sample size n_sample_frames then bootstrap the rest
     frames = [(i, frame_files[i], iparams) for i in random.sample(range(n_frames), iparams.indexing_ambiguity.n_sample_frames)]
     #get observations list
     print "Reading observations"
-    alt_dict_results = pool_map(
+    alt_dict_results = parallel_map(
           iterable=frames,
           func=get_obs_mproc,
           processes=iparams.n_processors)
@@ -121,7 +122,7 @@ class indexing_ambiguity_handler(object):
     frames = [(i, frame_dup_files[i], frame_keys[i], obs_list[i], obs_list) for i in range(len(frame_dup_files))]
     #calculate r
     print "Calculating R"
-    calc_r_results = pool_map(
+    calc_r_results = parallel_map(
           iterable=frames,
           func=calculate_r_mproc,
           processes=iparams.n_processors)
@@ -156,7 +157,7 @@ class indexing_ambiguity_handler(object):
     frames = [(i, frame_dup_files_sel[i], iparams) for i in range(len(frame_dup_files_sel))]
     #get observations list
     print "Re-reading observations"
-    alt_dict_results = pool_map(
+    alt_dict_results = parallel_map(
           iterable=frames,
           func=get_obs_mproc,
           processes=iparams.n_processors)
@@ -173,7 +174,7 @@ class indexing_ambiguity_handler(object):
     frames = [(i, frame_dup_files[i], frame_keys[i], obs_list[i], obs_list) for i in range(len(frame_dup_files))]
     #calculate r
     print "Re-calculating R"
-    calc_r_results = pool_map(
+    calc_r_results = parallel_map(
           iterable=frames,
           func=calculate_r_mproc,
           processes=iparams.n_processors)
@@ -209,7 +210,7 @@ class indexing_ambiguity_handler(object):
     if n_frames > iparams.indexing_ambiguity.n_selected_frames:
       print "Breaking the indexing ambiguity for the remaining images."
       old_iparams_data = iparams.data[:]
-      iparams.indexing_ambiguity.index_basis_in = sol_fname
+      iparams.indexing_ambiguity.index_basis_in = sol_pickle
       #generate a reference set from solved frames
       with open(sample_fname) as f:
         frame_files_processed = f.read().split('\n')[:-1]
@@ -220,7 +221,7 @@ class indexing_ambiguity_handler(object):
       #setup a list of remaining frames
       frame_files_remain = [frame for frame in frame_files if frame not in sol_pickle]
       frames = [(i, frame_files_remain[i], iparams, miller_array_ref) for i in range(len(frame_files_remain))]
-      cc_results = pool_map(
+      cc_results = parallel_map(
           iterable=frames,
           func=solve_with_mtz_mproc,
           processes=iparams.n_processors)
@@ -237,5 +238,5 @@ class indexing_ambiguity_handler(object):
     with open(iparams.run_no+'/log.txt', 'a') as f:
       f.write(txt_out)
     print "Indexing Ambiguity Solver Elapsed Time (s) %10.2s"%(time.time()-start)
-    return sol_fname, iparams
+    return sol_pickle, iparams
 

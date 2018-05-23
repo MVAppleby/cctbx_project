@@ -41,6 +41,10 @@ targlob = None
   .help = give a single blob giving the paths of tar files where the pickles are packaged up.
   .help = This reduces the number of files to be read in.  But as currently implemented
   .help = it does not reduce the number of file opens.
+hash_filenames = False
+  .type = bool
+  .help = For CC1/2, instead of using odd/even filenames to split images into two sets, \
+          hash the filename using md5 and split the images using odd/even hashes.
 predictions_to_edge {
   apply = False
     .type = bool
@@ -180,6 +184,9 @@ raw_data {
       show_finite_differences = False
         .type = bool
         .help = If True and minimizer is lbfgs, show the finite vs. analytical differences
+      plot_refinement_steps = False
+        .type = bool
+        .help = If True, plot refinement steps during refinement.
     }
   }
 }
@@ -345,13 +352,16 @@ levmar {
     .type = choice
     .multiple = True
 }
-cell_rejection {
+lattice_rejection {
   unit_cell = Auto
     .type = unit_cell
     .help = unit_cell for filtering crystals with the given unit cell params. If Auto will automatically choose PDB model unit cell.
   space_group = Auto
     .type = space_group
     .help = space_group for filtering crystals with the given space group params. If Auto will automatically choose PDB space group.
+  d_min = None
+    .type = float
+    .help = minimum resolution for lattices to be merged
 }
 """ + mysql_master_phil
 
@@ -516,26 +526,48 @@ def load_result (file_name,
   print >> out, sg_info
   print >> out, unit_cell
 
-  #Check for pixel size (at this point we are assuming we have square pixels, all experiments described in one
-  #refined_experiments.json file use the same detector, and all panels on the detector have the same pixel size)
+  if obj.get('beam_s0',None) is not None:
+    # Remove the need for pixel size within cxi.merge.  Allows multipanel detector with dissimilar panels.
+    # Relies on new frame extractor code called by dials.stills_process that writes s0, s1 and polarization normal
+    # vectors all to the integration pickle.  Future path: use dials json and reflection file.
+    s0_vec = matrix.col(obj["beam_s0"]).normalize()
+    s0_polar_norm = obj["beam_polarization_normal"]
+    s1_vec = obj["s1_vec"][0]
+    Ns1 = len(s1_vec)
+    # project the s1_vector onto the plane normal to s0.  Get result by subtracting the
+    # projection of s1 onto s0, which is (s1.dot.s0_norm)s0_norm
+    s0_norm = flex.vec3_double(Ns1,s0_vec)
+    s1_proj = (s1_vec.dot(s0_norm))*s0_norm
+    s1_in_normal_plane = s1_vec - s1_proj
+    # Now want the polar angle between the projected s1 and the polarization normal
+    s0_polar_norms = flex.vec3_double(Ns1,s0_polar_norm)
+    dotprod = (s1_in_normal_plane.dot(s0_polar_norms))
+    costheta = dotprod/(s1_in_normal_plane.norms())
+    theta = flex.acos(costheta)
+    prospective = flex.cos(2.0*theta)
+    obj["cos_two_polar_angle"] = prospective
+    # gives same as old answer to ~1% but not exact.  Not sure why, should not matter.
 
-  if params.pixel_size is not None:
-    pixel_size = params.pixel_size
-  elif "pixel_size" in obj:
-    pixel_size = obj["pixel_size"]
   else:
-    raise Sorry("Cannot find pixel size. Specify appropriate pixel size in mm for your detector in phil file.")
+    #Check for pixel size (at this point we are assuming we have square pixels, all experiments described in one
+    #refined_experiments.json file use the same detector, and all panels on the detector have the same pixel size)
+    if params.pixel_size is not None:
+      pixel_size = params.pixel_size
+    elif "pixel_size" in obj:
+      pixel_size = obj["pixel_size"]
+    else:
+      raise Sorry("Cannot find pixel size. Specify appropriate pixel size in mm for your detector in phil file.")
 
-  #Calculate displacements based on pixel size
-  assert obj['mapped_predictions'][0].size() == obj["observations"][0].size()
-  mm_predictions = pixel_size*(obj['mapped_predictions'][0])
-  mm_displacements = flex.vec3_double()
-  cos_two_polar_angle = flex.double()
-  for pred in mm_predictions:
-    mm_displacements.append((pred[0]-obj["xbeam"],pred[1]-obj["ybeam"],0.0))
-    cos_two_polar_angle.append( math.cos( 2. * math.atan2(pred[1]-obj["ybeam"],pred[0]-obj["xbeam"]) ) )
-  obj["cos_two_polar_angle"] = cos_two_polar_angle
-  #then convert to polar angle and compute polarization correction
+    #Calculate displacements based on pixel size
+    assert obj['mapped_predictions'][0].size() == obj["observations"][0].size()
+    mm_predictions = pixel_size*(obj['mapped_predictions'][0])
+    mm_displacements = flex.vec3_double()
+    cos_two_polar_angle = flex.double()
+    for pred in mm_predictions:
+      mm_displacements.append((pred[0]-obj["xbeam"],pred[1]-obj["ybeam"],0.0))
+      cos_two_polar_angle.append( math.cos( 2. * math.atan2(pred[1]-obj["ybeam"],pred[0]-obj["xbeam"]) ) )
+    obj["cos_two_polar_angle"] = cos_two_polar_angle
+    #then convert to polar angle and compute polarization correction
 
   if (not bravais_lattice(sg_info.type().number()) == ref_bravais_type) :
     raise WrongBravaisError("Skipping cell in different Bravais type (%s)" %
@@ -1102,13 +1134,13 @@ class scaling_manager (intensity_data) :
     else:
       image_info = None
 
-    if self.params.cell_rejection.unit_cell == Auto:
-      self.params.cell_rejection.unit_cell = self.params.target_unit_cell
+    if self.params.lattice_rejection.unit_cell == Auto:
+      self.params.lattice_rejection.unit_cell = self.params.target_unit_cell
 
     try :
       result = load_result(
         file_name=file_name,
-        reference_cell=self.params.cell_rejection.unit_cell,
+        reference_cell=self.params.lattice_rejection.unit_cell,
         ref_bravais_type=self.ref_bravais_type,
         params=self.params,
         reindex_op = reindex_op,
@@ -1516,6 +1548,13 @@ class scaling_manager (intensity_data) :
     if self.params.scaling.algorithm == 'mark0' and \
        corr <= self.params.min_corr:
       print >> out, "Skipping these data - correlation too low."
+    # Apply a resolution filter, if appropriate.
+    if self.params.lattice_rejection.d_min and \
+      observations.d_min() >= self.params.lattice_rejection.d_min:
+      print >> out, "Skipping these data - diffraction worse than %.2f Angstrom" % self.params.lattice_rejection.d_min
+      data.set_log_out(out.getvalue())
+      data.show_log_out(sys.stdout)
+      return null_data(file_name=file_name, log_out=out.getvalue(), low_signal=True)
     else:
       data.accept = True
       if self.params.postrefinement.enable and self.params.postrefinement.algorithm in ["rs_hybrid"]:

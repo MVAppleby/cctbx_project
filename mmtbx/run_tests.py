@@ -1,12 +1,13 @@
 from __future__ import division
 from libtbx import test_utils
 import libtbx.load_env
+from libtbx import easy_run
 
 tst_list = (
   # ions SVM
   "$D/ions/svm/tst_classifier.py",
-  "$D/ions/svm/tst_vector.py",
   "$D/ions/tst_pick_ca_svm.py",
+  "$D/ions/tst_pickle.py",
   # ion picking
   "$D/ions/tst_parameters.py",
   "$D/ions/tst_pick_ca.py",
@@ -14,7 +15,6 @@ tst_list = (
   "$D/ions/tst_pick_approx_zn.py",
   "$D/ions/tst_validate_ca.py",
   "$D/ions/tst_validate_mg.py",
-  #"$D/ions/tst_validate_zn.py", # FIXME
   "$D/ions/tst_symmetry_axis.py",
   "$D/ions/tst_utils.py",
   # TLS
@@ -73,7 +73,6 @@ tst_list = (
   "$D/regression/ncs/tst_ncs_search.py",
   "$D/regression/ncs/tst_ncs_search_flips.py",
   "$D/regression/ncs/tst_restraints.py",
-  "$D/regression/ncs/tst_asu_as_one_ncs_copy.py",
   "$D/regression/ncs/tst_geometry_minimization_ncs_constraints.py",
   "$D/regression/tst_geometry_minimization.py",
   ["$D/ncs/ncs.py", "exercise"],
@@ -205,7 +204,6 @@ tst_list = (
   "$D/regression/tst_fmodel_no_cryst1.py",
   "$D/regression/tst_fmodel_misc.py",
   "$D/regression/tst_isomorphous_difference_misc.py",
-  "$D/regression/tst_b_factor_statistics.py",
   "$D/regression/tst_geo_min_restraints_phil.py",
   "$D/regression/tst_dynamics_cli.py",
   "$D/ligands/tst_xtal_screens.py",
@@ -233,6 +231,7 @@ tst_list = (
   "$D/validation/regression/tst_molprobity_1.py",
   "$D/validation/regression/tst_molprobity_2.py",
   "$D/validation/regression/tst_molprobity_3.py",
+  "$D/validation/regression/tst_molprobity_4.py",
   "$D/validation/regression/tst_hydrogen_addition_clashscore.py",
   "$D/validation/regression/tst_symmetry_SS.py",
   "$D/validation/regression/tst_do_flips_clashscore.py",
@@ -353,9 +352,35 @@ tst_list = (
   "$D/geometry/tests/tst_shared_types.py",
   "$D/geometry/tests/tst_sphere_surface_sampling.py",
   "$D/geometry/tests/tst_topology.py",
+  #
+  "$D/wwpdb/tst_rcsb_web_services.py",
+  "$D/wwpdb/tst_utils.py",
+  "$D/monomer_library/tst_all_cif_files.py",
+  "$D/refinement/tst_misc.py",
+  "$D/refinement/tst_real_space_simple.py",
+  "$D/scaling/tst_bayesian_estimator.py",
+  "$D/scaling/tst_mean_f_rms_f.py",
+  "$D/scaling/tst_sigmaa.py",
+  "$D/scaling/tst_massage_data.py",
+  "$D/ions/tst_geometries.py",
+  "$D/ions/tst_pick_k.py",
+  "$D/ions/tst_environment.py",
+  "$D/regression/tst_table_one.py",
+  "$D/regression/tst_msa.py",
+  "$D/regression/tst_build_alt_confs.py",
+  "$D/regression/tst_cc_star.py",
+  "$D/regression/tst_fmodel_2.py",
+  "$D/regression/tst_rigid_bond_test.py",
+  "$D/validation/regression/tst_cablam.py",
+  "$D/building/tst_make_library.py",
+  "$D/regression/real_space_refine_chain/tst_00.py",
+  "$D/regression/real_space_refine_chain/tst_01.py",
+  "$D/conformation_dependent_library/test_omega_cdl.py",
+  "$D/regression/fix_cablam/tst_basic_cl_operations.py"
   )
 
 def run():
+  assert easy_run.call("libtbx.find_untested mmtbx True")==0
   build_dir = libtbx.env.under_build("mmtbx")
   dist_dir = libtbx.env.dist_path("mmtbx")
   test_utils.run_tests(build_dir, dist_dir, tst_list)

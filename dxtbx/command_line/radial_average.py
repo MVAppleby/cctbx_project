@@ -1,15 +1,18 @@
-from __future__ import absolute_import, division
 # LIBTBX_SET_DISPATCHER_NAME dxtbx.radial_average
 # LIBTBX_PRE_DISPATCHER_INCLUDE_SH export PHENIX_GUI_ENVIRONMENT=1
 # LIBTBX_PRE_DISPATCHER_INCLUDE_SH export BOOST_ADAPTBX_FPE_DEFAULT=1
 
-import libtbx.phil
-from libtbx.utils import Usage, Sorry
-from libtbx import easy_pickle
-from scitbx.matrix import col
-import sys
-import os
+from __future__ import absolute_import, division, print_function
+
 import math
+import os
+import sys
+
+import libtbx.phil
+from libtbx import easy_pickle
+from libtbx.utils import Sorry, Usage
+from scitbx.matrix import col
+
 
 master_phil = libtbx.phil.parse("""
   file_path = None
@@ -43,15 +46,17 @@ master_phil = libtbx.phil.parse("""
     .type = int
   x_axis = *two_theta q
     .type = choice
+  image_number = None
+    .type = int
 """)
 
 def distance (a,b): return math.sqrt((math.pow(b[0]-a[0],2)+math.pow(b[1]-a[1],2)))
 
-def run (args, image = None):
+def run (args, imageset = None):
   from xfel import radial_average
   from scitbx.array_family import flex
   import os, sys
-  import dxtbx
+  from dxtbx.datablock import DataBlockFactory
 
   # Parse input
   try:
@@ -72,7 +77,7 @@ def run (args, image = None):
         except RuntimeError as e:
           raise Sorry("Unrecognized argument '%s' (error: %s)" % (arg, str(e)))
     params = master_phil.fetch(sources=user_phil).extract()
-  if image is None:
+  if imageset is None:
     if params.file_path is None or len(params.file_path) == 0 or not all([os.path.isfile(f) for f in params.file_path]):
       master_phil.show()
       raise Usage("file_path must be defined (either file_path=XXX, or the path alone).")
@@ -96,29 +101,24 @@ def run (args, image = None):
   if params.mask is not None:
     params.mask = easy_pickle.load(params.mask)
 
-  if image is None:
+  if imageset is None:
     iterable = params.file_path
-    load_func = lambda x: dxtbx.load(x)
+    load_func = lambda x: DataBlockFactory.from_filenames([x])[0].extract_imagesets()[0]
   else:
-    iterable = [image]
+    iterable = [imageset]
     load_func = lambda x: x
 
   # Iterate over each file provided
   for item in iterable:
-    img = load_func(item)
-    try:
-      n_images = img.get_num_images()
+    iset = load_func(item)
+    n_images = len(iset)
+    if params.image_number is None:
       subiterable = xrange(n_images)
-    except AttributeError:
-      n_images = None
-      subiterable = [0]
+    else:
+      subiterable = [params.image_number]
     for image_number in subiterable:
-      if n_images is None:
-        beam = img.get_beam()
-        detector = img.get_detector()
-      else:
-        beam = img.get_beam(image_number)
-        detector = img.get_detector(image_number)
+      beam = iset.get_beam(image_number)
+      detector = iset.get_detector(image_number)
       s0 = col(beam.get_s0())
 
       # Search the detector for the panel farthest from the beam. The number of bins in the radial average will be
@@ -142,10 +142,7 @@ def run (args, image = None):
       sums_sq = flex.double(params.n_bins) * 0
       counts  = flex.int(params.n_bins) * 0
 
-      if n_images is None:
-        all_data = img.get_raw_data()
-      else:
-        all_data = img.get_raw_data(image_number)
+      all_data = iset[image_number]
 
       if not isinstance(all_data, tuple):
         all_data = (all_data,)
@@ -231,9 +228,9 @@ def run (args, image = None):
         if params.plot_y_max is not None:
           plt.ylim(0, params.plot_y_max)
 
-    if params.show_plots:
-      #plt.legend([os.path.basename(os.path.splitext(f)[0]) for f in params.file_path], ncol=2)
-      plt.show()
+  if params.show_plots:
+    #plt.legend([os.path.basename(os.path.splitext(f)[0]) for f in params.file_path], ncol=2)
+    plt.show()
 
   return xvals, results
 

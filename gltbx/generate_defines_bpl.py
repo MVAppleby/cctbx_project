@@ -1,4 +1,4 @@
-from __future__ import division
+from __future__ import absolute_import, division, print_function
 from libtbx.utils import write_this_is_auto_generated
 import libtbx.load_env
 import libtbx.path
@@ -26,13 +26,13 @@ GL_SAMPLES
 """
 
 def write_one(f, define):
-  print >> f, '#if defined(%s)' % define
-  print >> f, '    scope.attr("%s") = %s;' % (define, define)
-  print >> f, '#endif'
+  print('#if defined(%s)' % define, file=f)
+  print('    scope.attr("%s") = %s;' % (define, define), file=f)
+  print('#endif', file=f)
 
 def write_define_wrappers(f, namespace, defines, i_fragment):
   write_this_is_auto_generated(f, this)
-  print >> f, """\
+  print("""\
 #include <boost/python/def.hpp>
 #include <boost/python/scope.hpp>
 #include <gltbx/include_opengl.h>
@@ -41,17 +41,17 @@ namespace gltbx { namespace %s { namespace boost_python {
 
   void
   wrap_defines_%02d(boost::python::scope scope)
-  {""" % (namespace, i_fragment)
+  {""" % (namespace, i_fragment), file=f)
   for define in defines:
     write_one(f, define)
   if (namespace == "gl"):
-    for i in xrange(4): write_one(f, "GL_AUX%d" % i)
-    for i in xrange(8): write_one(f, "GL_LIGHT%d" % i)
-    for i in xrange(32): write_one(f, "GL_TEXTURE%d" % i)
-  print >> f, """\
+    for i in range(4): write_one(f, "GL_AUX%d" % i)
+    for i in range(8): write_one(f, "GL_LIGHT%d" % i)
+    for i in range(32): write_one(f, "GL_TEXTURE%d" % i)
+  print("""\
   }
 
-}}} // gltbx::%s::boost_python""" % namespace
+}}} // gltbx::%s::boost_python""" % namespace, file=f)
 
 def import_opengl_defines():
   result = []
@@ -62,7 +62,7 @@ def import_opengl_defines():
   return result
 
 def run(target_dir):
-  if (not os.path.isdir(target_dir)):
+  if not os.path.isdir(target_dir):
     os.makedirs(target_dir)
   gl_defines = []
   glu_defines = []
@@ -76,16 +76,15 @@ def run(target_dir):
     block_size = len(defines) // n_fragments
     if (block_size * n_fragments < len(defines)):
       block_size += 1
-    for i_fragment in xrange(n_fragments):
+    for i_fragment in range(n_fragments):
       file_name = libtbx.path.norm_join(
         target_dir, namespace+"_defines_%02d_bpl.cpp" % i_fragment)
-      f = open(file_name, "w")
-      write_define_wrappers(
-        f=f,
-        namespace=namespace,
-        defines=defines[i_fragment*block_size:(i_fragment+1)*block_size],
-        i_fragment=i_fragment)
-      f.close()
+      with open(file_name, "w") as f:
+        write_define_wrappers(
+          f=f,
+          namespace=namespace,
+          defines=defines[i_fragment*block_size:(i_fragment+1)*block_size],
+          i_fragment=i_fragment)
 
-if (__name__ == "__main__"):
+if __name__ == "__main__":
   run(".")

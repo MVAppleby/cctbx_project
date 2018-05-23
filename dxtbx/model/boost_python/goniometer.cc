@@ -45,7 +45,55 @@ namespace dxtbx { namespace model { namespace boost_python {
         obj.get_fixed_rotation(),
         obj.get_setting_rotation());
     }
+
+    static
+    boost::python::tuple getstate(boost::python::object obj)
+    {
+      const Goniometer &goniometer = boost::python::extract<const Goniometer &>(obj)();
+      return boost::python::make_tuple(
+          obj.attr("__dict__"),
+          goniometer.get_setting_rotation_at_scan_points());
+    }
+
+    static
+    void setstate(boost::python::object obj, boost::python::tuple state)
+    {
+      Goniometer &goniometer = boost::python::extract<Goniometer&>(obj)();
+      DXTBX_ASSERT(boost::python::len(state) == 2);
+
+      // restore the object's __dict__
+      boost::python::dict d = boost::python::extract<boost::python::dict>(
+          obj.attr("__dict__"))();
+      d.update(state[0]);
+
+      // restore the internal state of the C++ object
+      scitbx::af::const_ref< mat3<double> > S_list = boost::python::extract<
+        scitbx::af::const_ref< mat3<double> > >(state[1]);
+      goniometer.set_setting_rotation_at_scan_points(S_list);
+    }
+
+    static bool getstate_manages_dict() { return true; }
   };
+
+  static
+  void Goniometer_set_S_at_scan_points_from_tuple(Goniometer &goniometer, boost::python::tuple l) {
+    scitbx::af::shared< mat3<double> > S_list;
+    for (std::size_t i = 0; i < boost::python::len(l); ++i) {
+      mat3<double> S = boost::python::extract< mat3<double> >(l[i]);
+      S_list.push_back(S);
+    }
+    goniometer.set_setting_rotation_at_scan_points(S_list.const_ref());
+  }
+
+  static
+  void Goniometer_set_S_at_scan_points_from_list(Goniometer &goniometer, boost::python::list l) {
+    scitbx::af::shared< mat3<double> > S_list;
+    for (std::size_t i = 0; i < boost::python::len(l); ++i) {
+      mat3<double> S = boost::python::extract< mat3<double> >(l[i]);
+      S_list.push_back(S);
+    }
+    goniometer.set_setting_rotation_at_scan_points(S_list.const_ref());
+  }
 
   template <>
   boost::python::dict to_dict<Goniometer>(const Goniometer &obj) {
@@ -53,17 +101,33 @@ namespace dxtbx { namespace model { namespace boost_python {
     result["rotation_axis"] = obj.get_rotation_axis_datum();
     result["fixed_rotation"] = obj.get_fixed_rotation();
     result["setting_rotation"] = obj.get_setting_rotation();
+    if(obj.get_num_scan_points() > 0){
+      boost::python::list l;
+      scitbx::af::shared< mat3<double> > setting_rotation_at_scan_points =
+          obj.get_setting_rotation_at_scan_points();
+      for (scitbx::af::shared< mat3<double> >::iterator it = setting_rotation_at_scan_points.begin();
+           it != setting_rotation_at_scan_points.end();
+           ++it) {
+        l.append(boost::python::tuple(*it));
+      }
+      result["setting_rotation_at_scan_points"] = l;
+    }
     return result;
   }
 
   template <>
   Goniometer* from_dict<Goniometer>(boost::python::dict obj) {
-    return new Goniometer(
+    Goniometer* g = new Goniometer(
       boost::python::extract< vec3<double> >(obj["rotation_axis"]),
       boost::python::extract< mat3<double> >(obj.get("fixed_rotation",
         mat3<double>(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))),
       boost::python::extract< mat3<double> >(obj.get("setting_rotation",
         mat3<double>(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))));
+    if(obj.has_key("setting_rotation_at_scan_points")){
+      boost::python::list S_at_scan_points = boost::python::extract<boost::python::list>(obj["setting_rotation_at_scan_points"]);
+      Goniometer_set_S_at_scan_points_from_list(*g, S_at_scan_points);
+    }
+    return g;
   }
 
   void export_goniometer()
@@ -100,6 +164,21 @@ namespace dxtbx { namespace model { namespace boost_python {
         &Goniometer::get_setting_rotation)
       .def("set_setting_rotation",
         &Goniometer::set_setting_rotation)
+      .add_property("num_scan_points", &Goniometer::get_num_scan_points)
+      .def("get_num_scan_points",
+        &Goniometer::get_num_scan_points)
+      .def("set_setting_rotation_at_scan_points",
+        &Goniometer::set_setting_rotation_at_scan_points)
+      .def("set_setting_rotation_at_scan_points",
+        &Goniometer_set_S_at_scan_points_from_tuple)
+      .def("set_setting_rotation_at_scan_points",
+        &Goniometer_set_S_at_scan_points_from_list)
+      .def("get_setting_rotation_at_scan_points",
+        &Goniometer::get_setting_rotation_at_scan_points)
+      .def("get_setting_rotation_at_scan_point",
+        &Goniometer::get_setting_rotation_at_scan_point)
+      .def("reset_scan_points",
+        &Goniometer::reset_scan_points)
       .def("rotate_around_origin",
           &rotate_around_origin, (
             arg("axis"),

@@ -3,7 +3,7 @@ from __future__ import division
 '''
 Author      : Lyubimov, A.Y.
 Created     : 04/14/2014
-Last Changed: 11/03/2017
+Last Changed: 04/04/2018
 Description : IOTA GUI Initialization module
 '''
 
@@ -12,9 +12,12 @@ import wx
 import wx.lib.agw.ultimatelistctrl as ulc
 from wxtbx import bitmaps
 import multiprocessing
+import argparse
 
 from iotbx import phil as ip
 from libtbx import easy_pickle as ep
+from libtbx.phil.command_line import argument_interpreter as argint
+from libtbx.utils import Sorry
 from cctbx import miller
 assert miller
 
@@ -55,6 +58,30 @@ elif (wx.Platform == '__WXMSW__'):
   python = "Python"    #TODO: make sure it's right!
 
 
+# --------------------------- Command-line Parser ---------------------------- #
+
+def parse_command_args(help_message):
+  """ Parses command line arguments (only options for now) """
+  parser = argparse.ArgumentParser(prog = 'iota',
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+            description=(help_message),
+            epilog=('\n{:-^70}\n'.format('')))
+  parser.add_argument('path', type=str, nargs = '*', default = None,
+            help = 'Path to data or file with IOTA parameters')
+  parser.add_argument('--version', action = 'version',
+            version = 'IOTA {}'.format(misc.iota_version),
+            help = 'Prints version info of IOTA')
+  parser.add_argument('-w', type=int, nargs=1, default=0, dest='watch',
+            help = 'Run IOTA in watch mode - check for new images')
+  parser.add_argument('-r', type=int, nargs=1, default=0, dest='random',
+            help = 'Run IOTA with a random subset of images, e.g. "-r 5"')
+  parser.add_argument('-n', type=int, nargs='?', default=0, dest='nproc',
+            help = 'Specify a number of cores for a multiprocessor run"')
+  parser.add_argument('--tmp', type=str, nargs = 1, default = None,
+            help = 'Path to temp folder')
+  return parser
+
+
 # ------------------------------- Main Window -------------------------------- #
 
 class MainWindow(wx.Frame):
@@ -71,11 +98,11 @@ class MainWindow(wx.Frame):
 
     # Create some defaults on startup
     # Figure out temp folder
-    self.iparams = self.iota_phil.extract()
+    self.gparams = self.iota_phil.extract()
     tmp_folder = '/tmp/{}_{}'.format(user, pid)
-    self.iparams.advanced.temporary_output_folder = tmp_folder
+    self.gparams.advanced.temporary_output_folder = tmp_folder
 
-    self.iota_phil = self.iota_phil.format(python_object=self.iparams)
+    self.iota_phil = self.iota_phil.format(python_object=self.gparams)
 
     # Menu bar
     menubar = wx.MenuBar()
@@ -191,6 +218,57 @@ class MainWindow(wx.Frame):
     # File list control bindings
     self.Bind(ulc.EVT_LIST_INSERT_ITEM, self.onItemInserted,
               self.input_window.input)
+
+  def read_command_line_options(self):
+
+    help_message = '''This command will run the IOTA GUI '''
+
+    self.args, self.phil_args = parse_command_args('').parse_known_args()
+
+    if self.args.path is not None and len(self.args.path) > 0:
+      for carg in self.args.path:
+        if os.path.exists(carg):
+          if os.path.isfile(carg) and os.path.basename(carg).endswith('.param'):
+            self.load_script(filepath=carg, update_input_window=False)
+          else:
+            self.input_window.input.add_item(os.path.abspath(carg))
+
+    if self.args.watch > 0:
+      self.gparams.advanced.monitor_mode = True
+      self.gparams.advanced.monitor_mode_timeout = True
+      self.gparams.advanced.monitor_mode_timeout_length = self.args.watch[0]
+
+    if self.args.random > 0:
+      self.gparams.advanced.random_sample.flag_on = True
+      self.gparams.advanced.random_sample.number = self.args.random[0]
+
+    if self.args.tmp is not None:
+      self.gparams.advanced.temporary_output_folder = self.args.tmp[0]
+
+    if self.args.nproc is not None:
+      self.gparams.n_processors = self.args.nproc
+
+    self.iota_phil = self.iota_phil.format(python_object=self.gparams)
+
+    # Parse in-line params into phil
+    argument_interpreter = argint(master_phil=self.iota_phil)
+    consume = []
+    for arg in self.phil_args:
+      try:
+        command_line_params = argument_interpreter.process(arg=arg)
+        self.iota_phil = self.iota_phil.fetch(sources=[command_line_params, ])
+        consume.append(arg)
+      except Sorry, e:
+        pass
+    for item in consume:
+      self.phil_args.remove(item)
+    if len(self.phil_args) > 0:
+      raise Sorry(
+        "Not all arguments processed, remaining: {}".format(self.phil_args))
+
+    self.gparams = self.iota_phil.extract()
+    self.update_input_window()
+
 
   def onItemInserted(self, e):
     print self.input_window.input.all_data_images
@@ -355,6 +433,7 @@ class MainWindow(wx.Frame):
     if path_dlg.ShowModal() == wx.ID_OK:
       self.reset_settings()
       selected = path_dlg.selected
+      recovery_mode = path_dlg.recovery_mode
       int_path = selected[1]
 
       init_file = os.path.join(int_path, 'init.cfg')
@@ -372,7 +451,8 @@ class MainWindow(wx.Frame):
         rec_init.viz_base = os.path.join(int_path, 'visualization')
         rec_init.logfile = os.path.join(int_path, 'iota.log')
         with open(rec_init.logfile, 'r') as lf:
-          log_phil = ip.parse(''.join(lf.readlines()[4:86]))
+          lines = lf.readlines()[4:86]
+          log_phil = ip.parse(''.join(lines))
         self.iota_phil = self.iota_phil.fetch(source=log_phil)
         rec_init.params = self.iota_phil.extract()
         input_entries = [i for i in rec_init.params.input if i != None]
@@ -380,74 +460,24 @@ class MainWindow(wx.Frame):
 
       self.gparams = self.iota_phil.extract()
 
-      # # Test / fix input folders / files
-      # for inp in self.gparams.input:
-      #   if not os.path.exists(inp):
-      #     error_msg = wx.MessageDialog(None,
-      #                                  'INPUT PATH {} NOT FOUND!\n'
-      #                                  'Would you like to look for it?'
-      #                                  ''.format(inp),
-      #                                  wx.YES_NO | wx.ICON_ERROR)
-      #     if (error_msg.ShowModal() == wx.ID_YES):
-      #       open_dlg = wx.DirDialog(self, "Choose the input folder:",
-      #                               style=wx.DD_DEFAULT_STYLE)
-      #       if open_dlg.ShowModal() == wx.ID_OK:
-      #         path = os.path.abspath(open_dlg.GetPath())
-      #         if path not in self.gparams.input:
-      #           self.gparams.input.append(path)
-      #       else:
-      #         return
-      #     else:
-      #       return
-      #
-      # # Test / fix output folder
-      # if not os.path.isdir(self.gparams.output):
-      #   error_msg = wx.MessageDialog(None,
-      #                                'OUTPUT FOLDER {} NOT FOUND!\n'
-      #                                'Would you like to look for it?'
-      #                                ''.format(self.gparams.output),
-      #                                wx.YES_NO | wx.ICON_ERROR)
-      #   if (error_msg.ShowModal() == wx.ID_YES):
-      #     open_dlg = wx.DirDialog(self, "Choose the output folder:",
-      #                             style=wx.DD_DEFAULT_STYLE)
-      #     if open_dlg.ShowModal() == wx.ID_OK:
-      #       self.gparams.output = os.path.abspath(open_dlg.GetPath())
-      #       int_no = rec_init.int_base.split('/')[-1]
-      #       cnv_no = rec_init.conv_base.split('/')[-1]
-      #       rec_init.input_base = self.gparams.input
-      #       rec_init.conv_base = os.path.join(self.gparams.output,
-      #                                         'converted_pickles', cnv_no)
-      #       rec_init.int_base = os.path.join(self.gparams.output,
-      #                                        'integration', int_no)
-      #       rec_init.fin_base = os.path.join(rec_init.int_base, 'final')
-      #       rec_init.log_base = os.path.join(rec_init.int_base, 'logs')
-      #       rec_init.obj_base = os.path.join(rec_init.int_base, 'image_objects')
-      #       rec_init.viz_base = os.path.join(rec_init.int_base, 'visualization')
-      #       rec_init.logfile = os.path.join(int_path, 'iot.log')
-      #     else:
-      #       return
-      #   else:
-      #     return
-
       # Re-populate input window with settings from read-in run (check that
       # nothing has been moved)
       rec_target_phil_file = os.path.join(rec_init.int_base, 'target.phil')
       with open(rec_target_phil_file, 'r') as pf:
         rec_target_phil = pf.read()
       self.target_phil = rec_target_phil
-
-
       self.update_input_window()
 
       # Re-open processing window with results of the run
-      self.proc_window = frm.ProcWindow(self, -1, title='Image Processing',
-                                        target_phil=rec_target_phil,
-                                        phil=self.iota_phil)
-      self.proc_window.recover(int_path=rec_init.int_base,
-                               init=rec_init,
-                               status=selected[0],
-                               params=self.gparams)
-      self.proc_window.Show(True)
+      if recovery_mode == 0:
+        self.proc_window = frm.ProcWindow(self, -1, title='Image Processing',
+                                          target_phil=rec_target_phil,
+                                          phil=self.iota_phil)
+        self.proc_window.recover(int_path=rec_init.int_base,
+                                 init=rec_init,
+                                 status=selected[0],
+                                 params=self.gparams)
+        self.proc_window.Show(True)
 
   def onRun(self, e):
     # Run full processing
@@ -459,10 +489,17 @@ class MainWindow(wx.Frame):
       self.init_settings()
       title = 'Image Processing'
 
+    input_list = []
+    input_items = self.input_window.input.all_data_images
+
+    for key, imageset in input_items.iteritems():
+      input_list.extend(imageset)
+
     self.proc_window = frm.ProcWindow(self, -1, title=title,
                                       target_phil=self.target_phil,
                                       phil=self.iota_phil)
-    init = InitAll(iver=misc.iota_version)
+    init = InitAll(iver=misc.iota_version, input_list=input_list)
+
     self.proc_window.run(init)
 
     if self.proc_window.good_to_go:
@@ -532,7 +569,7 @@ class MainWindow(wx.Frame):
     if load_dlg.ShowModal() == wx.ID_OK:
       self.load_script(load_dlg.GetPaths()[0])
 
-  def load_script(self, filepath):
+  def load_script(self, filepath, update_input_window=True):
     '''
     Clears settings and loads new settings from IOTA param file
 
@@ -569,7 +606,8 @@ class MainWindow(wx.Frame):
       self.target_phil = None
 
     # Update input window with loaded parameters
-    self.update_input_window()
+    if update_input_window:
+      self.update_input_window()
 
 
   def reset_settings(self):
@@ -683,7 +721,7 @@ class InitAll(object):
 
   """
 
-  def __init__(self, iver):
+  def __init__(self, iver, input_list=None):
     from datetime import datetime
     self.iver = iver
     self.user_id = user
@@ -692,6 +730,7 @@ class InitAll(object):
     self.conv_base = None
     self.obj_base = None
     self.int_base = None
+    self.input_list = input_list
 
 
   def make_input_list(self):
@@ -699,7 +738,9 @@ class InitAll(object):
         Optional selection of a random subset
     """
     input_entries = [i for i in self.params.input if i != None]
-    input_list = ginp.make_input_list(input_entries)
+    input_list = ginp.make_input_list(input_entries,
+                                      filter=True,
+                                      filter_type='image')
 
     # Pick a randomized subset of images
     if self.params.advanced.random_sample.flag_on and \
@@ -710,6 +751,26 @@ class InitAll(object):
 
     return inp_list
 
+
+  def select_image_range(self, full_list):
+    img_range_string = str(self.params.advanced.image_range.range)
+    img_range_elements = img_range_string.split(',')
+    img_list = []
+    for n in img_range_elements:
+      if '-' in n:
+        img_limits = [int(i) for i in n.split('-')]
+        start = min(img_limits)
+        end = max(img_limits)
+        if start <= len(full_list) and end <= len(full_list):
+          img_list.extend(full_list[start:end])
+      else:
+        if int(n) <= len(full_list):
+         img_list.append(full_list[int(n)])
+
+    if len(img_list) > 0:
+      return img_list
+    else:
+      return full_list
 
   def select_random_subset(self, input_list):
     """ Selects random subset of input entries """
@@ -738,33 +799,33 @@ class InitAll(object):
     return random_inp_list
 
 
-  def make_int_object_list(self):
-    """ Generates list of image objects from previous grid search """
-    from libtbx import easy_pickle as ep
-
-    if self.params.cctbx.selection.select_only.grid_search_path == None:
-      int_dir = misc.set_base_dir('integration', True)
-    else:
-      int_dir = self.params.cctbx.selection.select_only.grid_search_path
-
-    img_objects = []
-
-    # Inspect integration folder for image objects
-    for root, dirs, files in os.walk(int_dir):
-      for filename in files:
-        found_file = os.path.join(root, filename)
-        if found_file.endswith(('int')):
-          obj = ep.load(found_file)
-          img_objects.append(obj)
-
-    # Pick a randomized subset of images
-    if self.params.advanced.random_sample.flag_on and \
-                  self.params.advanced.random_sample.number < len(img_objects):
-      gs_img_objects = self.select_random_subset(img_objects)
-    else:
-      gs_img_objects = img_objects
-
-    return gs_img_objects
+  # def make_int_object_list(self):
+  #   """ Generates list of image objects from previous grid search """
+  #   from libtbx import easy_pickle as ep
+  #
+  #   if self.params.cctbx.selection.select_only.grid_search_path == None:
+  #     int_dir = misc.set_base_dir('integration', True)
+  #   else:
+  #     int_dir = self.params.cctbx.selection.select_only.grid_search_path
+  #
+  #   img_objects = []
+  #
+  #   # Inspect integration folder for image objects
+  #   for root, dirs, files in os.walk(int_dir):
+  #     for filename in files:
+  #       found_file = os.path.join(root, filename)
+  #       if found_file.endswith(('int')):
+  #         obj = ep.load(found_file)
+  #         img_objects.append(obj)
+  #
+  #   # Pick a randomized subset of images
+  #   if self.params.advanced.random_sample.flag_on and \
+  #                 self.params.advanced.random_sample.number < len(img_objects):
+  #     gs_img_objects = self.select_random_subset(img_objects)
+  #   else:
+  #     gs_img_objects = img_objects
+  #
+  #   return gs_img_objects
 
 
   def sanity_check(self):
@@ -813,18 +874,21 @@ class InitAll(object):
                     of list file
     '''
 
-    from iota.components.iota_init import parse_command_args
-    self.args, self.phil_args = parse_command_args(self.iver, '').parse_known_args()
     self.params = gparams
     self.target_phil = target_phil
 
-    # Call function to read input folder structure (or input file) and
-    # generate list of image file paths
-    if self.params.cctbx.selection.select_only.flag_on:
-      self.gs_img_objects = self.make_int_object_list()
-      self.input_list = [i.conv_img for i in self.gs_img_objects]
-    else:
+    # If input list for some reason isn't transmitted from main window, make it
+    if self.input_list is None:
       self.input_list = self.make_input_list()
+
+    # Select range of images if turned on
+    if self.params.advanced.image_range.flag_on:
+      self.input_list = self.select_image_range(self.input_list)
+
+    # Select a random subset of images if turned on
+    if self.params.advanced.random_sample.flag_on and \
+      self.params.advanced.random_sample.number < len(self.input_list):
+      self.input_list = self.select_random_subset(self.input_list)
 
     # Check for data not found
     if len(self.input_list) == 0:

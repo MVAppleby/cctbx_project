@@ -7,29 +7,30 @@
 # least viewed.
 #
 
-from __future__ import absolute_import, division
+from __future__ import absolute_import, division, print_function
 
-import struct, re
+import re
+import struct
 
 from dxtbx.format.FormatTIFFRayonix import FormatTIFFRayonix
 
 def check(l):
   """ Sets l or values in l that are less than zero to zero """
-  if type(l) != list and type(l) != tuple:
+  if not isinstance(l, list) and not isinstance(l, tuple):
     if l < 0:
       return 0
     else:
       return l
   ret = []
   for val in l:
-    if type(val) == list:
+    if isinstance(val, list):
       ret.append(check(val))
     else:
       if val < 0:
         val = 0
       ret.append(val)
 
-  if type(l) == tuple:
+  if isinstance(l, tuple):
     return tuple(ret)
   return ret
 
@@ -115,4 +116,4 @@ if __name__ == '__main__':
   import sys
 
   for arg in sys.argv[1:]:
-    print FormatTIFFRayonixXPP.understand(arg)
+    print(FormatTIFFRayonixXPP.understand(arg))

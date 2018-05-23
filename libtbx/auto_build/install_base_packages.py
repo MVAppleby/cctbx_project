@@ -7,25 +7,34 @@ function.  In the future this will be used as the core of the CCI nightly build
 system and the Phenix installer.
 """
 
-from __future__ import division
-from installer_utils import *
-from package_defs import *
-from optparse import OptionParser
+from __future__ import absolute_import, division
+
 import os
 import os.path as op
 import platform
 import sys
 import time
 import zipfile
+from optparse import OptionParser
 
-# XXX HACK
-libtbx_path = op.abspath(op.dirname(op.dirname(__file__)))
-if (not libtbx_path in sys.path) :
-  sys.path.append(libtbx_path)
+if __name__ == '__main__' and __package__ is None:
+  # Cannot use relative imports when run from bootstrap, so add this
+  # directory to the path.
+  sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+  from installer_utils import *
+  from package_defs import *
+else:
+  from .installer_utils import *
+  from .package_defs import *
 
 python_dependencies = {"_ssl" : "Secure Socket Library",
                        "zlib" : "XCode command line tools",
                      }
+
+# Turn off user site-packages directory to avoid conflicts
+# https://www.python.org/dev/peps/pep-0370/
+os.environ['PYTHONNOUSERSITE'] = '1'
+
 
 class installer (object) :
   def __init__ (self, args=None, packages=None, log=sys.stdout) :
@@ -69,6 +78,8 @@ class installer (object) :
       help="Use the system Python interpreter", action="store_true")
     parser.add_option("--python3", dest="python3", action="store_true", default=False,
       help="Install a Python3 interpreter. This is unsupported and purely for development purposes.")
+    parser.add_option("--wxpython4", dest="wxpython4", action="store_true", default=False,
+      help="Install wxpython4 instead of wxpython3. This is unsupported and purely for development purposes.")
     parser.add_option("--mpi-build", dest="mpi_build", action="store_true", default=False,
       help="Installs software with MPI functionality")
     parser.add_option("-g", "--debug", dest="debug", action="store_true",
@@ -92,7 +103,7 @@ class installer (object) :
       help="Build all recommended dependencies", default=False)
     # Specific add-on packages.
     parser.add_option("--scipy", dest="build_scipy", action="store_true",
-      help="Build SciPy (requires Fortran compiler)", default=False)
+      help="Build SciPy", default=False)
     parser.add_option("--ipython", dest="build_ipython", action="store_true",
       help="Build IPython", default=False)
     parser.add_option("--git-ssh", dest="git_ssh", action="store_true",
@@ -194,6 +205,8 @@ class installer (object) :
     python_executable = 'python'
     self.python3 = options.python3
     if self.python3: python_executable = 'python3'
+    self.wxpython4 = options.wxpython4 # or self.python3 # Python3 should imply wxpython4, but
+                                                         # wait until we can actually build it
     if os.path.exists(os.path.join(self.build_dir, 'base', 'bin', python_executable)):
       self.python_exe = os.path.join(self.build_dir, 'base', 'bin', python_executable)
     elif options.with_python:
@@ -257,7 +270,11 @@ class installer (object) :
     if options.dials:
       options.build_gui = True
       options.build_all = True
-      packages += ['pillow']
+      packages += ['pillow', 'jinja2', 'orderedset', 'procrunner', 'scipy', 'scikit_learn']
+    if options.xia2:
+      options.build_gui = True
+      options.build_all = True
+      packages += ['pillow', 'jinja2', 'procrunner', 'tabulate']
     if options.labelit:
       options.build_gui = True
       options.build_all = True
@@ -274,8 +291,8 @@ class installer (object) :
     # Python 2-3 compatibility packages
     packages += ['python_compatibility']
     # Always build hdf5 and numpy.
-    packages += ['cython', 'hdf5', 'numpy', 'pythonextra', 'docutils']
-    packages += ['libsvm', 'lz4_plugin', 'jinja2']
+    packages += ['cython', 'hdf5', 'h5py', 'numpy', 'pythonextra', 'docutils']
+    packages += ['libsvm', 'lz4_plugin']
     # Development and testing packages.
     packages += ['pytest', 'junitxml']
     # GUI packages.
@@ -457,10 +474,6 @@ Installation of Python packages may fail.
     # Update paths.
     self.update_paths()
 
-    # Turn off user site-packages directory to avoid conflicts
-    # https://www.python.org/dev/peps/pep-0370/
-    os.environ['PYTHONNOUSERSITE'] = '1'
-
   def update_paths(self):
     os.environ["PATH"] = ("%s/bin:" % self.base_dir) + os.environ['PATH']
     lib_paths = [ op.join(self.base_dir, "lib") ]
@@ -639,23 +652,33 @@ Installation of Python packages may fail.
                               '-d', pkg_info['cachedir'], pkg_info['debug']])
       if extra_options:
         pip_cmd.extend(extra_options)
+      if int(pip.__version__.split('.')[0]) > 9:
+        import pip._internal
+        pip_call = pip._internal.main
+        pip_cmd.append('--no-cache-dir')
+      else:
+        pip_call = pip.main
       print "  Running with pip:", pip_cmd
-      assert pip.main(pip_cmd) == 0, 'pip download failed'
+      assert pip_call(pip_cmd) == 0, 'pip download failed'
       return
     if extra_options:
       extra_options = ' '.join(extra_options)
     else:
       extra_options = ''
-    self.call(pkg_info['python'] + ' -m pip download ' + pkg_info['debug'] + \
-              ' "' + pkg_info['package'] + pkg_info['version'] + '" -d "' + \
-              pkg_info['cachedir'] + '" ' + extra_options,
-              log=log)
     if callback_before_build:
+      self.call(pkg_info['python'] + ' -m pip download ' + pkg_info['debug'] + \
+                ' "' + pkg_info['package'] + pkg_info['version'] + '" -d "' + \
+                pkg_info['cachedir'] + '" ' + extra_options,
+                log=log)
       assert callback_before_build(log), package_name
-    self.call(pkg_info['python'] + ' -m pip install ' + pkg_info['debug'] + \
-              ' "' + pkg_info['package'] + pkg_info['version'] + \
-              '" --no-index -f "' + pkg_info['cachedir'] + '" ' + extra_options,
-              log=log)
+      self.call(pkg_info['python'] + ' -m pip install ' + pkg_info['debug'] + \
+                ' "' + pkg_info['package'] + pkg_info['version'] + \
+                '" --no-index -f "' + pkg_info['cachedir'] + '" ' + extra_options,
+                log=log)
+    else:
+      self.call(pkg_info['python'] + ' -m pip install ' + pkg_info['debug'] + \
+                ' "' + pkg_info['package'] + pkg_info['version'] + '" ' + extra_options,
+                log=log)
     if callback_after_build:
       assert callback_after_build(log), package_name
     if confirm_import_module:
@@ -664,21 +687,8 @@ Installation of Python packages may fail.
 
   def check_dependencies(self, packages=None):
     packages = packages or []
-    if 'scipy' in packages:
-      compilers = ['gfortran', 'g77', 'g95', 'f77', 'f95']
-      found = []
-      for compiler in compilers:
-        try:
-          check_output(compiler)
-          found.append(compiler)
-        except RuntimeError:
-          # Found compiler, but error like "no input files"
-          found.append(compiler)
-        except OSError:
-          # Command not found
-          pass
-      if not found:
-        raise Exception("No Fortran compiler found for Scipy. Requires one of: %s"%(", ".join(compilers)))
+
+    # no-op
 
   def build_dependencies(self, packages=None):
     # Build in the correct dependency order.
@@ -694,19 +704,24 @@ Installation of Python packages may fail.
       'libsvm',
       'pytest',
       'pythonextra',
-      'jinja', 'jinja2',
       'junitxml',
       'hdf5',
+      'h5py',
       'biopython',
       'docutils',
       'sphinx',
       'ipython',
       'pyopengl',
       'scipy',
+      'scikit_learn',
       'mpi4py',
       'py2app',
       'misc',
       'lz4_plugin',
+      'jinja2',
+      'orderedset',
+      'procrunner',
+      'tabulate',
       # ...
       'freetype',
       'matplotlib',
@@ -771,14 +786,13 @@ Installation of Python packages may fail.
       sys.exit(1)
     log = self.start_building_package("Python")
     os.chdir(self.tmp_dir)
-    python_tarball = self.fetch_package(PYTHON_PKG)
+    python_tarball = self.fetch_package(pkg_name=PYTHON_PKG, pkg_url=DEPENDENCIES_BASE)
     if self.check_download_only(PYTHON_PKG): return
     python_dir = untar(python_tarball)
     self.chdir(python_dir, log=log)
 
     # configure macOS and linux separately
-    configure_args = ['--with-ensurepip=install'] # common flags
-    #configure_args.append("--enable-unicode=ucs4")
+    configure_args = [] # common flags should go here
     if self.flag_is_mac:
       configure_args += [
         self.prefix,
@@ -829,6 +843,10 @@ Installation of Python packages may fail.
     self.call('make', log=log, cwd=python_dir)
     self.call('make install', log=log, cwd=python_dir)
     python_exe = op.abspath(op.join(self.base_dir, "bin", "python"))
+
+    # Install pip *separately* from the python install - this ensures that
+    # we don't accidentally pick up the user-site pythonpath
+    self.call([python_exe, "-mensurepip"], log=log, cwd=python_dir)
 
     # Make python relocatable
     python_sysconfig = check_output([ python_exe, '-c',
@@ -889,7 +907,7 @@ _replace_sysconfig_paths(build_time_vars)
       configure_args.append("--enable-shared")
     environment = os.environ.copy()
     environment['LDFLAGS'] = "-L{base}/lib/ -L{base}/lib64/".format(base=self.base_dir)
-    environment['LDFLAGS'] += " -Wl,-rpath={base}/lib".format(base=self.base_dir)
+    environment['LDFLAGS'] += " -Wl,-rpath,{base}/lib".format(base=self.base_dir)
     environment['LD_LIBRARY_PATH'] = "{base}/lib/:{base}/lib64/".format(base=self.base_dir)
     environment['CPPFLAGS'] = "-I{base}/include -I{base}/include/openssl".format(base=self.base_dir)
     self.call([os.path.join(python_dir, 'configure')] + configure_args,
@@ -986,21 +1004,11 @@ _replace_sysconfig_paths(build_time_vars)
       pkg_name_label="libsvm")
 
   def build_numpy(self):
-    global NUMPY_VERSION
-    if self.python3:
-      NUMPY_VERSION="1.13.3"
-      self.build_python_module_pip(
-        package_name='numpy',
-        package_version=NUMPY_VERSION,
-        confirm_import_module="numpy",
-      )
-    else:
-      self.build_python_module_pip(
-        package_name='numpy',
-        package_version=NUMPY_VERSION,
-        confirm_import_module="numpy",
-        extra_options=['--no-binary=numpy'],
-      )
+    self.build_python_module_pip(
+      package_name='numpy',
+      package_version=NUMPY_VERSION,
+      confirm_import_module="numpy",
+    )
 
   def build_docutils(self):
     self.build_python_module_pip(
@@ -1018,6 +1026,8 @@ _replace_sysconfig_paths(build_time_vars)
       'mock', package_version=MOCK_VERSION)
     self.build_python_module_pip(
       'pytest', package_version=PYTEST_VERSION)
+    self.build_python_module_pip(
+      'pytest-xdist', package_version=PYTEST_XDIST_VERSION)
 
   def build_biopython(self):
     self.build_python_module_simple(
@@ -1061,16 +1071,23 @@ _replace_sysconfig_paths(build_time_vars)
     self.call("%s setup.py build"%self.python_exe,log=log)
     self.call("%s setup.py install --h5plugin --h5plugin-dir=../hdf5_lz4"%(self.python_exe),log=log)
     self.chdir("../hdf5_lz4",log=log)
-    print >> log, "Copying new libraries to base/lib folder"
-    self.call("cp -v *.so %s/lib"%self.base_dir,log=log)
+    print >> log, "Copying new libraries to base/lib/plugins folder"
+    hdf5_plugin_dir = os.path.join(self.base_dir, "lib", "plugins")
+    if not os.path.exists(hdf5_plugin_dir):
+      os.mkdir(hdf5_plugin_dir)
+    self.call("cp -v *.so %s"%hdf5_plugin_dir,log=log)
 
   def build_scipy(self):
-    # requires Fortran compiler.
-    self.build_python_module_simple(
-      pkg_url=BASE_CCI_PKG_URL,
-      pkg_name=SCIPY_PKG,
-      pkg_name_label="SciPy",
+    self.build_python_module_pip(
+      package_name='scipy',
+      package_version=SCIPY_VERSION,
       confirm_import_module="scipy")
+
+  def build_scikit_learn(self):
+    self.build_python_module_pip(
+      package_name='scikit-learn',
+      package_version=SCIKIT_LEARN_VERSION,
+      confirm_import_module="sklearn")
 
   def build_mpi4py(self):
     self.build_python_module_pip(
@@ -1104,9 +1121,6 @@ _replace_sysconfig_paths(build_time_vars)
       package_name="Sphinx",
       package_version=SPHINX_VERSION,
       confirm_import_module="sphinx")
-    self.build_python_module_pip(
-      package_name="numpydoc",
-      package_version=NUMPYDOC_VERSION)
 
   def build_ipython(self):
     self.build_python_module_simple(
@@ -1123,8 +1137,6 @@ _replace_sysconfig_paths(build_time_vars)
         confirm_import_module="OpenGL")
 
   def build_cython(self):
-    global CYTHON_VERSION
-    if self.python3: CYTHON_VERSION="0.27.3"
     self.build_python_module_pip(
       'Cython', package_version=CYTHON_VERSION,
       confirm_import_module='cython')
@@ -1134,13 +1146,25 @@ _replace_sysconfig_paths(build_time_vars)
       'Jinja2', package_version=JINJA2_VERSION,
       confirm_import_module='jinja2')
 
+  def build_orderedset(self):
+    self.build_python_module_pip(
+      'orderedset', package_version=ORDEREDSET_VERSION,
+      confirm_import_module='orderedset')
+
+  def build_procrunner(self):
+    self.build_python_module_pip(
+      'procrunner', package_version=PROCRUNNER_VERSION,
+      confirm_import_module='procrunner')
+
+  def build_tabulate(self):
+    self.build_python_module_pip(
+      'tabulate', package_version=TABULATE_VERSION,
+      confirm_import_module='tabulate')
+
   def build_hdf5(self):
     pkg_log = self.start_building_package("HDF5")
     hdf5pkg = self.fetch_package(pkg_name=HDF5_PKG, pkg_url=BASE_HDF5_PKG_URL)
-    h5pypkg = self.fetch_package(pkg_name=H5PY_PKG, pkg_url=BASE_H5PY_PKG_URL)
-    if self.check_download_only(HDF5_PKG) and \
-       self.check_download_only(H5PY_PKG):
-      return
+    if self.check_download_only(HDF5_PKG): return
     self.untar_and_chdir(pkg=hdf5pkg, log=pkg_log)
     print >> pkg_log, "Building base HDF5 library..."
     make_args = []
@@ -1154,18 +1178,11 @@ _replace_sysconfig_paths(build_time_vars)
       log=pkg_log,
       make_args=make_args)
 
-    # not strictly necessary, but prints 'installing' message
-    if self.check_download_only(H5PY_PKG): return
-    os.chdir(self.tmp_dir)
-
-    self.untar_and_chdir(pkg=h5pypkg, log=pkg_log)
-    self.call("%s setup.py configure --hdf5=\"%s\"" % (self.python_exe,
-      self.base_dir), log=pkg_log)
-    self.call("%s setup.py build" % (self.python_exe), log=pkg_log)
-    self.call("%s setup.py install" % (self.python_exe), log=pkg_log)
-    # FIXME this appears to fail on CentOS 5 (gcc 4.1.2)
-    #self.call("%s setup.py test" % self.python_exe, log=pkg_log)
-    self.verify_python_module("h5py", "h5py")
+  def build_h5py(self):
+    os.environ['HDF5_DIR'] = self.base_dir
+    self.build_python_module_pip(
+      'h5py', package_version=H5PY_VERSION,
+      confirm_import_module='h5py', extra_options=["--no-binary=h5py"])
 
   def build_openssl(self) :
     # https://wiki.openssl.org/index.php/Compilation_and_Installation#Configure_.26_Config
@@ -1412,8 +1429,16 @@ _replace_sysconfig_paths(build_time_vars)
     os.chdir(self.tmp_dir)
 
   def build_wxpython(self):
+    if self.wxpython4:
+      print "Building wxPython4 is currently not supported and will most " \
+            "likely fail until wxPython 4.0.2 is released"
+      # 4.0.2 will contain the fix for https://github.com/wxWidgets/Phoenix/issues/780
+      self.build_python_module_pip(
+        'wxPython', package_version="4.0.1",
+        confirm_import_module='wx')
+      return
     if self.python3:
-      # Skip wxPython for the Python3 pathway for now
+      print "Skipping installation of wxPython3 - no point doing this on Python3"
       return
 
     pkg_log = self.start_building_package("wxPython")

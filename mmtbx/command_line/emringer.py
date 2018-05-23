@@ -1,3 +1,14 @@
+from __future__ import division, print_function
+
+from iotbx.cli_parser import run_program
+from mmtbx.programs import emringer
+
+if __name__ == '__main__':
+  run_program(program_class=emringer.Program)
+
+# =============================================================================
+# old code - maybe necessary until GUI is updated
+
 # LIBTBX_SET_DISPATCHER_NAME phenix.emringer
 # LIBTBX_PRE_DISPATCHER_INCLUDE_SH PHENIX_GUI_ENVIRONMENT=1
 # LIBTBX_PRE_DISPATCHER_INCLUDE_SH export PHENIX_GUI_ENVIRONMENT
@@ -19,12 +30,14 @@ References:
 
 # Any software that wants to use the pkl output of this tool
 # should import ringer_residue and ringer_chi from it.
-from __future__ import division
+#from __future__ import division
 import libtbx.phil
 from libtbx import easy_pickle
 from libtbx.str_utils import make_header
 from libtbx import runtime_utils
 from libtbx.utils import Sorry
+import mmtbx.utils
+from iotbx import map_and_model
 import time
 import os
 import sys
@@ -97,10 +110,17 @@ phenix.emringer model.pdb map.mrc [cif_file ...] [options]
   validate_params(params)
   pdb_in = cmdline.get_file(params.model)
   pdb_in.check_file_type("pdb")
-  hierarchy = pdb_in.file_object.construct_hierarchy()
-  crystal_symmetry_model = pdb_in.file_object.crystal_symmetry()
-  hierarchy.atoms().reset_i_seq()
-  map_coeffs = ccp4_map = None
+
+  pdb_inp = iotbx.pdb.input(file_name=params.model)
+  model = mmtbx.model.manager(
+    model_input      = pdb_inp)
+  crystal_symmetry_model = model.crystal_symmetry()
+  if crystal_symmetry_model is not None:
+    crystal_symmetry_model.show_summary()
+
+  hierarchy = model.get_hierarchy()
+  map_coeffs = map_inp = None
+  map_data, unit_cell = None, None
   if (params.map_coeffs is not None) :
     mtz_in = cmdline.get_file(params.map_coeffs)
     mtz_in.check_file_type("hkl")
@@ -129,12 +149,22 @@ phenix.emringer model.pdb map.mrc [cif_file ...] [options]
         raise Sorry("Multiple appropriate map coefficients found in file. "+
           "Choices:\n  %s" % "\n  ".join(best_labels))
       map_coeffs = best_guess
-      print >> out, "  Guessing %s for input map coefficients" % best_labels[0]
+      print("  Guessing %s for input map coefficients"% best_labels[0], file=out)
   else :
     ccp4_map_in = cmdline.get_file(params.map_file)
     ccp4_map_in.check_file_type("ccp4_map")
-    ccp4_map = ccp4_map_in.file_object
+    map_inp = ccp4_map_in.file_object
+    cs_consensus = mmtbx.utils.check_and_set_crystal_symmetry(
+      models = [model], map_inps=[map_inp])
+    base = map_and_model.input(
+      map_data         = map_inp.map_data(),
+      model            = model,
+      box              = False)
+    hierarchy = base.model().get_hierarchy()
+    map_data = base.map_data()
+    unit_cell = map_inp.grid_unit_cell()
 
+  hierarchy.atoms().reset_i_seq()
 
   make_header("Iterating over residues", out=out)
   t1 = time.time()
@@ -142,22 +172,22 @@ phenix.emringer model.pdb map.mrc [cif_file ...] [options]
   results = iterate_over_residues(
     pdb_hierarchy=hierarchy,
     map_coeffs=map_coeffs,
-    ccp4_map=ccp4_map,
-    crystal_symmetry_model=crystal_symmetry_model,
+    map_data  = map_data,
+    unit_cell = unit_cell,
     params=params,
     log=out).results
   t2 = time.time()
   if (verbose) :
-    print >> out, "Time excluding I/O: %8.1fs" % (t2 - t1)
-    print >> out, "Overall runtime:    %8.1fs" % (t2 - t0)
+    print("Time excluding I/O: %8.1fs" % (t2 - t1), file=out)
+    print("Overall runtime:    %8.1fs" % (t2 - t0), file=out)
   if (params.output_base is None) :
     pdb_base = os.path.basename(params.model)
     params.output_base = os.path.splitext(pdb_base)[0] + "_emringer"
   easy_pickle.dump("%s.pkl" % params.output_base, results)
-  print >> out, "Wrote %s.pkl" % params.output_base
+  print("Wrote %s.pkl" % params.output_base, file=out)
   csv = "\n".join([ r.format_csv() for r in results ])
   open("%s.csv" % params.output_base, "w").write(csv)
-  print >> out, "Wrote %s.csv" % params.output_base
+  print("Wrote %s.csv" % params.output_base, file=out)
   if (plots_dir is None) :
     plots_dir = params.output_base + "_plots"
   if (not os.path.isdir(plots_dir)) :
@@ -184,8 +214,9 @@ phenix.emringer model.pdb map.mrc [cif_file ...] [options]
     save=True,
     out=out)
   scoring.show_summary(out=out)
-  print >> out, "\nReferences:"
-  print >> out, """\
+  print("\nReferences:", file=out)
+
+  references = """\
   Barad BA, Echols N, Wang RYR, Cheng YC, DiMaio F, Adams PD, Fraser JS. (2015)
   Side-chain-directed model and map validation for 3D Electron Cryomicroscopy.
   Nature Methods, in press.
@@ -194,6 +225,7 @@ phenix.emringer model.pdb map.mrc [cif_file ...] [options]
   Automated electron-density sampling reveals widespread conformational
   polymorphism in proteins. Protein Sci. 2010 Jul;19(7):1420-31. PubMed PMID:
   20499387"""
+  print(references, file=out)
   if (params.show_gui) :
     run_app(results)
   else :
@@ -315,5 +347,5 @@ else :
       self.Layout()
       self.parent.Refresh()
 
-if (__name__ == "__main__") :
-  run(sys.argv[1:])
+#if (__name__ == "__main__") :
+#  run(sys.argv[1:])

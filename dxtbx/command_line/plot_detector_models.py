@@ -1,4 +1,5 @@
 from __future__ import division
+from __future__ import absolute_import, print_function
 # LIBTBX_SET_DISPATCHER_NAME dxtbx.plot_detector_models
 # LIBTBX_PRE_DISPATCHER_INCLUDE_SH export PHENIX_GUI_ENVIRONMENT=1
 # LIBTBX_PRE_DISPATCHER_INCLUDE_SH export BOOST_ADAPTBX_FPE_DEFAULT=1
@@ -134,6 +135,8 @@ def run(args):
                                                   show_origin_vectors = params.show_origin_vectors,
                                                   panel_numbers = params.panel_numbers)
 
+  plt.xlabel('x')
+  plt.ylabel('y')
   if params.orthographic:
     plt.axes().set_aspect('equal', 'datalim')
 

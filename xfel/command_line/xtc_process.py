@@ -349,23 +349,6 @@ extra_dials_phil_str = '''
     include scope dials.algorithms.refinement.refiner.phil_scope
     include scope dials.algorithms.integration.integrator.phil_scope
   }
-
-  radial_average {
-    enable = False
-      .type = bool
-      .help = If True, perform a radial average on each image
-    two_theta_low = None
-      .type = float
-      .help = If not None and database logging is enabled, for each image \
-              compute the radial average at this two theta position and log \
-              it in the database
-    two_theta_high = None
-      .type = float
-      .help = If not None and database logging is enabled, for each image \
-              compute the radial average at this two theta position and log \
-              it in the database
-    include scope dxtbx.command_line.radial_average.master_phil
-  }
 '''
 
 class EventOffsetSerializer(object):
@@ -376,11 +359,13 @@ class EventOffsetSerializer(object):
     self.lastBeginCalibCycleDgram = psanaOffset.lastBeginCalibCycleDgram()
 
 from xfel.ui import db_phil_str
+from xfel.command_line.xfel_process import radial_average_phil_str
 
-phil_scope = parse(xtc_phil_str + dials_phil_str + extra_dials_phil_str + db_phil_str, process_includes=True).fetch(parse(program_defaults_phil_str))
+phil_scope = parse(xtc_phil_str + dials_phil_str + extra_dials_phil_str + db_phil_str + radial_average_phil_str, process_includes=True).fetch(parse(program_defaults_phil_str))
 
 from xfel.command_line.xfel_process import Script as DialsProcessScript
-class InMemScript(DialsProcessScript):
+from xfel.ui.db.frame_logging import DialsProcessorWithLogging
+class InMemScript(DialsProcessScript, DialsProcessorWithLogging):
   """ Script to process XFEL data at LCLS """
   def __init__(self):
     """ Set up the option parser. Arguments come from the command line or a phil file """
@@ -409,6 +394,9 @@ class InMemScript(DialsProcessScript):
     self.all_int_pickles = []
 
     self.cached_ranges = None
+
+    self.tt_low = None
+    self.tt_high = None
 
   def debug_start(self, ts):
     self.debug_str = "%s,%s"%(socket.gethostname(), ts)
@@ -871,6 +859,10 @@ class InMemScript(DialsProcessScript):
             print "Couldn't reintegrate", img_file, str(e)
     print "Rank %d signing off"%rank
 
+  def get_run_and_timestamp(self, obj):
+    # Used by database logger
+    return self.run.run(), self.timestamp
+
   def process_event(self, run, evt):
     """
     Process a single event from a run
@@ -890,6 +882,7 @@ class InMemScript(DialsProcessScript):
 
     if len(self.params_cache.debug.event_timestamp) > 0 and ts not in self.params_cache.debug.event_timestamp:
       return
+    self.run = run
 
     if self.params_cache.debug.skip_processed_events or self.params_cache.debug.skip_unprocessed_events or self.params_cache.debug.skip_bad_events:
       if ts in self.known_events:
@@ -956,7 +949,7 @@ class InMemScript(DialsProcessScript):
       image_dict = evt.get(self.params.format.pickle.out_key)
       data = image_dict['DATA']
 
-    timestamp = t = ts
+    self.timestamp = timestamp = t = ts
     s = t[0:4] + t[5:7] + t[8:10] + t[11:13] + t[14:16] + t[17:19] + t[20:23]
     print "Processing shot", s
 
@@ -1015,24 +1008,17 @@ class InMemScript(DialsProcessScript):
       if tt_low is not None or tt_high is not None:
         print "Warning, mod_radial_average is being used while also using xtc_process radial averaging. mod_radial_averaging results will not be logged to the database."
 
-      from dxtbx.command_line.radial_average import run as radial_run
-      two_thetas, radial_average_values = radial_run(self.params.radial_average, image = dxtbx_img)
+    datablock = DataBlockFactory.from_imageset(imgset)[0]
 
-      def get_closest_idx(data, val):
-        deltas = flex.abs(data - val)
-        return flex.first_index(deltas, flex.min(deltas))
-
-      if self.params.radial_average.two_theta_low is not None:
-        tt_low = radial_average_values[get_closest_idx(two_thetas, self.params.radial_average.two_theta_low)]
-
-      if self.params.radial_average.two_theta_high is not None:
-        tt_high = radial_average_values[get_closest_idx(two_thetas, self.params.radial_average.two_theta_high)]
+    try:
+      self.pre_process(datablock)
+    except Exception, e:
+      self.debug_write("preprocess_exception", "fail")
+      return
 
     if not self.params.dispatch.find_spots:
       self.debug_write("data_loaded", "done")
       return
-
-    datablock = DataBlockFactory.from_imageset(imgset)[0]
 
     # before calling DIALS for processing, set output paths according to the templates
     if not self.params.output.composite_output:
@@ -1083,7 +1069,6 @@ class InMemScript(DialsProcessScript):
     if self.params.dispatch.hit_finder.enable and len(observed) < self.params.dispatch.hit_finder.minimum_number_of_reflections:
       print "Not enough spots to index"
       self.debug_write("not_enough_spots_%d"%len(observed), "stop")
-      self.log_frame(None, None, run.run(), len(observed), timestamp, tt_low, tt_high)
       return
 
     self.restore_ranges(dxtbx_img)
@@ -1110,7 +1095,6 @@ class InMemScript(DialsProcessScript):
 
     if not self.params.dispatch.index:
       self.debug_write("strong_shot_%d"%len(observed), "done")
-      self.log_frame(None, None, run.run(), len(observed), timestamp, tt_low, tt_high)
       return
 
     # index and refine
@@ -1121,7 +1105,6 @@ class InMemScript(DialsProcessScript):
       import traceback; traceback.print_exc()
       print str(e), "event", timestamp
       self.debug_write("indexing_failed_%d"%len(observed), "stop")
-      self.log_frame(None, None, run.run(), len(observed), timestamp, tt_low, tt_high)
       return
 
     if self.params.dispatch.dump_indexed:
@@ -1136,13 +1119,13 @@ class InMemScript(DialsProcessScript):
         expt.imageset = imgset
 
     self.debug_write("refine_start")
+
     try:
       experiments, indexed = self.refine(experiments, indexed)
     except Exception, e:
       import traceback; traceback.print_exc()
       print str(e), "event", timestamp
       self.debug_write("refine_failed_%d"%len(indexed), "fail")
-      self.log_frame(None, None, run.run(), len(observed), timestamp, tt_low, tt_high)
       return
 
     if self.params.dispatch.reindex_strong:
@@ -1153,12 +1136,10 @@ class InMemScript(DialsProcessScript):
         import traceback; traceback.print_exc()
         print str(e), "event", timestamp
         self.debug_write("reindexstrong_failed_%d"%len(indexed), "fail")
-        self.log_frame(None, None, run.run(), len(observed), timestamp, tt_low, tt_high)
         return
 
     if not self.params.dispatch.integrate:
       self.debug_write("index_ok_%d"%len(indexed), "done")
-      self.log_frame(experiments, indexed, run.run(), len(observed), timestamp, tt_low, tt_high)
       return
 
     # integrate
@@ -1186,26 +1167,10 @@ class InMemScript(DialsProcessScript):
       import traceback; traceback.print_exc()
       print str(e), "event", timestamp
       self.debug_write("integrate_failed_%d"%len(indexed), "fail")
-      self.log_frame(None, None, run.run(), len(observed), timestamp, tt_low, tt_high)
       return
     self.restore_ranges(dxtbx_img)
 
-    self.log_frame(experiments, integrated, run.run(), len(observed), timestamp, tt_low, tt_high)
     self.debug_write("integrate_ok_%d"%len(integrated), "done")
-
-  def log_frame(self, experiments, reflections, run, n_strong, timestamp = None, two_theta_low = None, two_theta_high = None):
-    if self.params.experiment_tag is None:
-      return
-    try:
-      from xfel.ui.db.dxtbx_db import log_frame
-      log_frame(experiments, reflections, self.params, run, n_strong, timestamp, two_theta_low, two_theta_high)
-    except Exception, e:
-      import traceback; traceback.print_exc()
-      print str(e), "event", timestamp
-      if reflections is None:
-        self.debug_write("db_logging_failed", "fail")
-      else:
-        self.debug_write("db_logging_failed_%d" % len(reflections), "fail")
 
   def save_image(self, image, params, root_path):
     """ Save an image, in either cbf or pickle format.

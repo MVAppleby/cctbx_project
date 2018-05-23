@@ -1,16 +1,16 @@
 from __future__ import division
-import time
+import os, time
 import mmtbx.model
 import iotbx.pdb
 from mmtbx.monomer_library.pdb_interpretation import grand_master_phil_str
 from libtbx.test_utils import approx_equal
-from mmtbx.hydrogens.validate_H import validate_H
+from mmtbx.hydrogens.validate_H import validate_H, validate_H_results
 #from validate_H_cl_app import master_params_str
 
 pdb_str = """
-CRYST1   31.264   27.900   96.292  90.00  90.00  90.00 P 1
-SCALE1      0.031986  0.000000  0.000000        0.00000
-SCALE2      0.000000  0.035842  0.000000        0.00000
+CRYST1   43.705   48.284   96.292  90.00  90.00  90.00 P 1
+SCALE1      0.022881  0.000000  0.000000        0.00000
+SCALE2      0.000000  0.020711  0.000000        0.00000
 SCALE3      0.000000  0.000000  0.010385        0.00000
 ATOM      1  N   ASN A   1      25.174 -24.761 -21.940  1.00 16.59           N
 ATOM      2  CA  ASN A   1      25.971 -25.578 -22.850  1.00 17.25           C
@@ -123,7 +123,52 @@ HETATM  107  D1 AHOH B   4      22.045 -22.784 -23.297  1.00 30.00           D
 HETATM  108  D1 BHOH B   4      22.145 -21.784 -22.297  1.00 30.00           D
 HETATM  109  D1  HOH B   5      21.772 -27.767 -28.880  1.00 30.00           D
 TER
+HETATM    1  PG  ATP C   1       3.232  -0.948  -8.256  1.00 20.00      A    P
+HETATM    2  O1G ATP C   1       4.490  -0.168  -7.985  1.00 20.00      A    O
+HETATM    3  O2G ATP C   1       2.572  -0.420  -9.500  1.00 20.00      A    O-1
+HETATM    4  O3G ATP C   1       3.573  -2.392  -8.447  1.00 20.00      A    O-1
+HETATM    5  PB  ATP C   1       2.368   0.364  -5.856  1.00 20.00      A    P
+HETATM    6  O1B ATP C   1       3.702   0.219  -5.162  1.00 20.00      A    O
+HETATM    7  O2B ATP C   1       2.287   1.719  -6.506  1.00 20.00      A    O-1
+HETATM    8  O3B ATP C   1       2.218  -0.793  -6.996  1.00 20.00      A    O
+HETATM    9  PA  ATP C   1       0.926   1.250  -3.494  1.00 20.00      A    P
+HETATM   10  O1A ATP C   1      -0.200   2.200  -3.825  1.00 20.00      A    O
+HETATM   11  O2A ATP C   1       2.197   2.037  -3.253  1.00 20.00      A    O-1
+HETATM   12  O3A ATP C   1       1.155   0.210  -4.753  1.00 20.00      A    O
+HETATM   13  O5' ATP C   1       0.538   0.381  -2.115  1.00 20.00      A    O
+HETATM   14  C5' ATP C   1      -0.378   0.948  -1.194  1.00 20.00      A    C
+HETATM   15  C4' ATP C   1      -1.094  -0.162  -0.442  1.00 20.00      A    C
+HETATM   16  O4' ATP C   1      -0.263  -0.783   0.344  1.00 20.00      A    O
+HETATM   17  C3' ATP C   1      -2.258   0.478   0.549  1.00 20.00      A    C
+HETATM   18  O3' ATP C   1      -3.508   0.701  -0.219  1.00 20.00      A    O
+HETATM   19  C2' ATP C   1      -2.450  -0.373   1.436  1.00 20.00      A    C
+HETATM   20  O2' ATP C   1      -3.564  -1.296   1.031  1.00 20.00      A    O
+HETATM   21  C1' ATP C   1      -1.075  -1.183   1.553  1.00 20.00      A    C
+HETATM   22  N9  ATP C   1      -0.436  -0.847   2.669  1.00 20.00      A    N
+HETATM   23  C8  ATP C   1       0.891  -0.729   2.488  1.00 20.00      A    C
+HETATM   24  N7  ATP C   1       1.445  -0.426   3.672  1.00 20.00      A    N
+HETATM   25  C5  ATP C   1       0.455  -0.356   4.593  1.00 20.00      A    C
+HETATM   26  C6  ATP C   1       0.464  -0.066   5.953  1.00 20.00      A    C
+HETATM   27  N6  ATP C   1       1.576   0.468   6.779  1.00 20.00      A    N
+HETATM   28  N1  ATP C   1      -0.678  -0.046   6.637  1.00 20.00      A    N
+HETATM   29  C2  ATP C   1      -1.855  -0.311   6.004  1.00 20.00      A    C
+HETATM   30  N3  ATP C   1      -1.865  -0.595   4.675  1.00 20.00      A    N
+HETATM   31  C4  ATP C   1      -0.703  -0.615   3.975  1.00 20.00      A    C
+HETATM   32 H5'1 ATP C   1       0.163   1.581  -0.485  1.00 20.00      A    H
+HETATM   33 H5'2 ATP C   1      -1.105   1.545  -1.731  1.00 20.00      A    H
+HETATM   34  H4' ATP C   1      -1.548  -0.870  -1.145  1.00 20.00      A    H
+HETATM   35  H3' ATP C   1      -1.912   1.393   0.983  1.00 20.00      A    H
+HETATM   36 HO3' ATP C   1      -3.892   1.548   0.031  1.00 20.00      A    H
+HETATM   37  H2' ATP C   1      -2.680   0.114   2.384  1.00 20.00      A    H
+HETATM   38 HO2' ATP C   1      -4.066  -1.553   1.810  1.00 20.00      A    H
+HETATM   39  H1' ATP C   1      -1.273  -2.266   1.534  1.00 20.00      A    H
+HETATM   40  H8  ATP C   1       1.431  -0.922   1.560  1.00 20.00      A    H
+HETATM   41 HN61 ATP C   1       2.477   0.646   6.359  1.00 20.00      A    H
+HETATM   42 HN62 ATP C   1       1.445   0.610   7.769  1.00 20.00      A    H
+HETATM   43  H2  ATP C   1      -2.804  -0.294   6.573  1.00 20.00      A    H
+TER
 END
+
 """
 
 # exercise1 a) The C beta DB2 and DB3 atoms are swapped
@@ -516,6 +561,24 @@ def get_results_from_validate_H(neutron_distances, pdb_str):
   results = c.get_results()
   return results
 
+def test_output(results):
+  out = validate_H_results(results)
+  log = open(os.devnull, 'w')
+  out.print_results(prefix='  ', log=log)
+  log.close()
+
+  # export data for wxGUI
+  out.export_renamed_for_wxGUI()
+  out.export_occupancies_0_for_wxGUI()
+  out.export_occupancies_lt_1_for_wxGUI()
+  out.export_missing_HD_atoms_for_wxGUI()
+  out.export_outliers_bonds_for_wxGUI()
+  out.export_outliers_angles_for_wxGUI()
+  out.export_sites_different_xyz_for_wxGUI()
+  out.export_sites_different_b_for_wxGUI()
+  out.export_sites_sum_occ_for_wxGUI()
+  out.export_sites_occ_scattering_for_wxGUI()
+
 def exercise():
   results = get_results_from_validate_H(
     neutron_distances = True,
@@ -523,7 +586,8 @@ def exercise():
 
   oc = results.overall_counts_hd
   hd_atoms_with_occ_0 = oc.hd_atoms_with_occ_0
-  assert (oc.count_h == 30)
+
+  assert (oc.count_h == 42)
   assert (oc.count_d == 36)
   assert (oc.count_h_protein == 30)
   assert (oc.count_d_protein == 29)
@@ -535,6 +599,8 @@ def exercise():
   assert (oc.count_water_2h == 1)
   assert (oc.count_water_altconf == 1)
   assert (oc.count_water_no_oxygen == 1)
+  assert (oc.count_h_other == 12)
+  assert (oc.count_d_other == 0)
 
   answer = ['DD22ALEU A   3 ', ' HB2ASER A   5 ']
   for item, answer in zip(hd_atoms_with_occ_0, answer):
@@ -550,8 +616,7 @@ def exercise():
     assert(newname == answer[1])
     assert (entry[3] is not None)
 
-  hd_exchanged_sites = results.hd_exchanged_sites
-  assert (len(results.hd_exchanged_sites.keys()) == 22)
+  assert (results.count_exchanged_sites == 22)
 
   hd_sites_analysis  = results.hd_sites_analysis
   sites_different_xyz = hd_sites_analysis.sites_different_xyz
@@ -575,6 +640,9 @@ def exercise():
     assert approx_equal(item[3], answer, 1.e-2)
 
   missing_HD_atoms   = results.missing_HD_atoms
+
+  test_output(results)
+
   # XXX TODO
 
 # ------------------------------------------------------------------------------
@@ -609,6 +677,9 @@ def exercise1():
     assert(newname == answer[1])
     assert (entry[3] is not None)
 
+  test_output(results1)
+  test_output(results2)
+
 # ------------------------------------------------------------------------------
 # PROPERTIES H/D SITES
 # a) HA and DA have different coordinates
@@ -622,7 +693,7 @@ def exercise2():
     pdb_str = pdb_str2)
   hd_sites_analysis  = results.hd_sites_analysis
 
-  assert (len(results.hd_exchanged_sites.keys()) == 8)
+  assert (results.count_exchanged_sites == 8)
 
   sites_different_xyz = hd_sites_analysis.sites_different_xyz
   xyz_answer = [
@@ -649,6 +720,8 @@ def exercise2():
     assert (item[3] is not None and item[4] is not None) # make sure xyz exist
     assert (item[0].strip() == answer[0].strip())
     assert (item[1].strip() == answer[1].strip())
+
+  test_output(results)
 
 # ------------------------------------------------------------------------------
 # OCCUPANCIES
@@ -689,6 +762,8 @@ def exercise3():
     assert (item[1] == answer[1])
     assert (item[2] is not None) # make sure xyz exist
 
+  test_output(results)
+
 # ------------------------------------------------------------------------------
 # MISSING ATOMS
 # Model has only H atoms
@@ -708,6 +783,8 @@ def exercise4():
     for atom, aatom in zip(item[1], answer[1]):
       assert (atom.strip() == aatom.strip())
 
+  test_output(results)
+
 # ------------------------------------------------------------------------------
 # MISSING ATOMS
 # Model has only D atoms
@@ -726,6 +803,8 @@ def exercise5():
     assert (item[2] is not None) # make sure xyz exist
     for atom, aatom in zip(item[1], answer[1]):
       assert (atom.strip() == aatom.strip())
+
+  test_output(results)
 
 # ------------------------------------------------------------------------------
 # MISSING ATOMS
@@ -749,6 +828,8 @@ def exercise6():
     for atom, aatom in zip(item[1], answer[1]):
       assert (atom.strip() == aatom.strip())
       assert (atom.strip() != 'CG')
+
+  test_output(results)
 
 # ------------------------------------------------------------------------------
 # BOND OUTLIERS
@@ -776,6 +857,8 @@ def exercise7():
     assert approx_equal(item[2],answer[1], 1.e-2) # bond length model
     assert approx_equal(item[4],answer[2], 1.e-1) # target
 
+  test_output(results)
+
 # ------------------------------------------------------------------------------
 # BOND OUTLIERS
 # Model has only D atoms and only following outliers
@@ -801,6 +884,8 @@ def exercise8():
     assert (item[5] is not None)                  # make sure xyz exist
     assert approx_equal(item[2],answer[1], 1.e-2) # bond length model
     assert approx_equal(item[4],answer[2], 1.e-1) # target
+
+  test_output(results)
 
 # ------------------------------------------------------------------------------
 # BOND OUTLIERS
@@ -828,6 +913,8 @@ def exercise9():
     assert approx_equal(item[2],answer[1], 1.e-2) # bond length model
     assert approx_equal(item[4],answer[2], 1.e-1) # target
 
+  test_output(results)
+
 # ------------------------------------------------------------------------------
 # ANGLE OUTLIERS
 # Model has H and D atoms, and only the two following outliers
@@ -850,6 +937,8 @@ def exercise10():
     assert approx_equal(item[2],answer[1], 1.e-2) # angle in model
     assert approx_equal(item[4],answer[2], 1.e-1) # target
 
+  test_output(results)
+
 # ------------------------------------------------------------------------------
 # Mismatch between expected restraints and X-H(D) bond lengths
 # Input model has H at X-ray distances but use_neutron_distances flag is True
@@ -862,6 +951,8 @@ def exercise11():
   bond_results = results.bond_results
 
   assert(bond_results.xray_distances_used == True)
+
+  test_output(results)
 
 # ------------------------------------------------------------------------------
 # CHECK HD STATE (hd_state)
@@ -918,4 +1009,3 @@ if (__name__ == "__main__"):
   t0 = time.time()
   run()
   print "OK. Time: %8.3f"%(time.time()-t0)
-

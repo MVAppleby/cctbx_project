@@ -10,7 +10,8 @@
 #
 # Experimental format for TIA .ser files used by FEI microscope at eBIC.
 
-from __future__ import absolute_import, division
+from __future__ import absolute_import, division, print_function
+
 from dxtbx.format.FormatSER import FormatSER
 
 class FormatSEReBIC(FormatSER):
@@ -31,9 +32,10 @@ class FormatSEReBIC(FormatSER):
     except IncorrectFormatError:
       return False
 
-    # get the first image and check it has the expected dimensions
-    im = fmt.get_raw_data(0)
-    if im.all() != (4096, 4096): return False
+    # Read metadata and check the image dimension is supported
+    d = fmt._read_metadata(image_file)
+    image_size = d['ArraySizeX'], d['ArraySizeY']
+    if image_size not in [(4096, 4096), (2048, 2048)]: return False
 
     return True
 
@@ -46,10 +48,15 @@ class FormatSEReBIC(FormatSER):
   def _detector(self):
     '''Dummy detector'''
 
-    pixel_size = 0.014, 0.014
-    image_size = 4096,4096
+    image_size = (self._header_dictionary['ArraySizeX'],
+                  self._header_dictionary['ArraySizeY'])
+    if image_size == (4096, 4096):
+      pixel_size = 0.014, 0.014
+    if image_size == (2048, 2048):
+      pixel_size = 0.028, 0.028
+
     distance = 2000
-    trusted_range = (-1, 65535)
+    trusted_range = (-4, 65535)
     beam_centre = [(p * i) / 2 for p, i in zip(pixel_size, image_size)]
     d = self._detector_factory.simple('PAD', distance, beam_centre, '+x', '-y',
                               pixel_size, image_size, trusted_range)
@@ -90,5 +97,4 @@ class FormatSEReBIC(FormatSER):
 if __name__ == '__main__':
   import sys
   for arg in sys.argv[1:]:
-    print FormatSEReBIC.understand(arg)
-
+    print(FormatSEReBIC.understand(arg))

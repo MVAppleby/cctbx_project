@@ -1,15 +1,7 @@
-#!/usr/bin/env python
-#
-#  experiment_list.py
-#
-#  Copyright (C) 2013 Diamond Light Source
-#
-#  Author: James Parkhurst
-#
-#  This code is distributed under the BSD license, a copy of which is
-#  included in the root directory of this package.
-from __future__ import absolute_import, division
+from __future__ import absolute_import, division, print_function
+
 import pkg_resources
+
 from dxtbx.model import Experiment, ExperimentList
 
 class InvalidExperimentListError(RuntimeError):
@@ -25,7 +17,7 @@ class ExperimentListDict(object):
   ''' A helper class for serializing the experiment list to dictionary (needed
   to save the experiment list to JSON format. '''
 
-  def __init__(self, obj, check_format=True):
+  def __init__(self, obj, check_format=True, directory=None):
     ''' Initialise. Copy the dictionary. '''
     from copy import deepcopy
     # Basic check: This is a dict-like object. This can happen if e.g. we
@@ -35,6 +27,7 @@ class ExperimentListDict(object):
 
     self._obj = deepcopy(obj)
     self._check_format = check_format
+    self._directory = directory
 
   def decode(self):
     ''' Decode the dictionary into a list of experiments. '''
@@ -89,7 +82,7 @@ class ExperimentListDict(object):
       elif isinstance(value, str):
         if value not in mmap:
           mmap[value] = len(mlist)
-          mlist.append(from_dict(ExperimentListDict._from_file(value)))
+          mlist.append(from_dict(ExperimentListDict._from_file(value, self._directory)))
         eobj[name] = mmap[value]
       elif not isinstance(value, int):
         raise TypeError('expected int or str, got %s' % type(value))
@@ -117,7 +110,7 @@ class ExperimentListDict(object):
       elif isinstance(value, str):
         if value not in mmap:
           mmap[value] = len(mlist)
-          mlist.append(ExperimentListDict._from_file(value))
+          mlist.append(ExperimentListDict._from_file(value, self._directory))
         eobj['imageset'] = mmap[value]
       elif not isinstance(value, int):
         raise TypeError('expected int or str, got %s' % type(value))
@@ -129,7 +122,7 @@ class ExperimentListDict(object):
     ''' Helper function. Extract the experiments. '''
     from dxtbx.imageset import ImageSweep, ImageSet, ImageGrid
     from dxtbx.serialize.filename import load_path
-    import cPickle as pickle
+    import six.moves.cPickle as pickle
     from dxtbx.format.image import ImageBool, ImageDouble
 
     # Map of imageset/scan pairs
@@ -141,6 +134,7 @@ class ExperimentListDict(object):
     for eobj in self._obj['experiment']:
 
       # Get the models
+      identifier = eobj.get("identifier", "")
       beam = ExperimentListDict.model_or_none(self._blist, eobj, 'beam')
       detector = ExperimentListDict.model_or_none(self._dlist, eobj, 'detector')
       goniometer = ExperimentListDict.model_or_none(self._glist, eobj, 'goniometer')
@@ -161,45 +155,50 @@ class ExperimentListDict(object):
           else:
             format_kwargs = {}
           if 'mask' in imageset and imageset['mask'] is not None:
-            mask_filename = load_path(imageset['mask'])
+            mask_filename = load_path(imageset['mask'], directory=self._directory)
             if self._check_format and mask_filename is not "":
-              mask = pickle.load(open(mask_filename))
+              with open(mask_filename, 'rb') as fh:
+                mask = pickle.load(fh)
             else:
               mask = None
           else:
             mask_filename = None
             mask = None
           if 'gain' in imageset and imageset['gain'] is not None:
-            gain_filename = load_path(imageset['gain'])
+            gain_filename = load_path(imageset['gain'], directory=self._directory)
             if self._check_format and gain_filename is not "":
-              gain = pickle.load(open(gain_filename))
+              with open(gain_filename, 'rb') as fh:
+                gain = pickle.load(fh)
             else:
               gain = None
           else:
             gain_filename = None
             gain = None
           if 'pedestal' in imageset and imageset['pedestal'] is not None:
-            pedestal_filename = load_path(imageset['pedestal'])
+            pedestal_filename = load_path(imageset['pedestal'], directory=self._directory)
             if self._check_format and pedestal_filename is not "":
-              pedestal = pickle.load(open(pedestal_filename))
+              with open(pedestal_filename, 'rb') as fh:
+                pedestal = pickle.load(fh)
             else:
               pedestal = None
           else:
             pedestal_filename = None
             pedestal = None
           if 'dx' in imageset and imageset['dx'] is not None:
-            dx_filename = load_path(imageset['dx'])
+            dx_filename = load_path(imageset['dx'], directory=self._directory)
             if dx_filename is not "":
-              dx = pickle.load(open(dx_filename))
+              with open(dx_filename, 'rb') as fh:
+                dx = pickle.load(fh)
             else:
               dx = None
           else:
             dx_filename = None
             dx = None
           if 'dy' in imageset and imageset['dy'] is not None:
-            dy_filename = load_path(imageset['dy'])
+            dy_filename = load_path(imageset['dy'], directory=self._directory)
             if dy_filename is not "":
-              dy = pickle.load(open(dy_filename))
+              with open(dy_filename, 'rb') as fh:
+                dy = pickle.load(fh)
             else:
               dy = None
           else:
@@ -301,7 +300,8 @@ class ExperimentListDict(object):
         scan=scan,
         crystal=crystal,
         profile=profile,
-        scaling_model=scaling_model))
+        scaling_model=scaling_model,
+        identifier=identifier))
 
     # Return the experiment list
     return el
@@ -314,7 +314,7 @@ class ExperimentListDict(object):
     ''' Make a still imageset. '''
     from dxtbx.imageset import ImageSetFactory
     from dxtbx.serialize.filename import load_path
-    filenames = [load_path(p) for p in imageset['images']]
+    filenames = [load_path(p, directory=self._directory) for p in imageset['images']]
     indices = None
     if "single_file_indices" in imageset:
       indices = imageset['single_file_indices']
@@ -346,7 +346,7 @@ class ExperimentListDict(object):
     from dxtbx.format.FormatMultiImage import FormatMultiImage
 
     # Get the template format
-    template = load_path(imageset['template'])
+    template = load_path(imageset['template'], directory=self._directory)
 
     # Get the number of images (if no scan is given we'll try
     # to find all the images matching the template
@@ -425,17 +425,16 @@ class ExperimentListDict(object):
         return entry_point.load().from_dict(obj)
 
   @staticmethod
-  def _from_file(filename):
+  def _from_file(filename, directory=None):
     ''' Load a model dictionary from a file. '''
     from dxtbx.serialize.load import _decode_dict
-    from dxtbx.serialize.filename import load_path, temp_chdir
+    from dxtbx.serialize.filename import load_path
     import json
     from os.path import dirname
-    filename = load_path(filename)
+    filename = load_path(filename, directory=directory)
     try:
-      with temp_chdir(dirname(filename)):
-        with open(filename, 'r') as infile:
-          return json.load(infile, object_hook=_decode_dict)
+      with open(filename, 'r') as infile:
+        return json.load(infile, object_hook=_decode_dict)
     except IOError:
       raise IOError('unable to read file, %s' % filename)
 
@@ -523,14 +522,14 @@ class ExperimentListDumper(object):
 
   def as_pickle(self, filename=None, **kwargs):
     ''' Dump experiment list as pickle. '''
-    import cPickle as pickle
+    import six.moves.cPickle as pickle
 
     # Get the pickle string
     text = pickle.dumps(self._experiment_list,
       protocol=pickle.HIGHEST_PROTOCOL)
 
     # Write the file
-    if filename is not None:
+    if filename:
       with open(filename, 'wb') as outfile:
         outfile.write(text)
     else:
@@ -572,8 +571,9 @@ class ExperimentListFactory(object):
     for filename in args:
       try:
         experiments.extend(ExperimentListFactory.from_serialized_format(filename))
-        if verbose: print 'Loaded experiments from %s' % filename
-      except Exception:
+        if verbose: print('Loaded experiments from %s' % filename)
+      except Exception as e:
+        if verbose: print("Could not load experiments from %s: %s" % (filename, str(e)))
         unhandled.append(filename)
 
     # Return the experiments
@@ -664,11 +664,14 @@ class ExperimentListFactory(object):
     return experiments
 
   @staticmethod
-  def from_dict(obj, check_format=True):
+  def from_dict(obj, check_format=True, directory=None):
     ''' Load an experiment list from a dictionary. '''
 
     # Decode the experiments from the dictionary
-    experiments = ExperimentListDict(obj, check_format).decode()
+    experiments = ExperimentListDict(
+      obj,
+      check_format=check_format,
+      directory=directory).decode()
 
     # Check the list is consistent
     assert(experiments.is_consistent())
@@ -677,32 +680,33 @@ class ExperimentListFactory(object):
     return experiments
 
   @staticmethod
-  def from_json(text, check_format=True):
+  def from_json(text, check_format=True, directory=None):
     ''' Load an experiment list from JSON. '''
     from dxtbx.serialize.load import _decode_dict
     import json
     return ExperimentListFactory.from_dict(
       json.loads(text, object_hook=_decode_dict),
-      check_format)
+      check_format=check_format,
+      directory=directory)
 
   @staticmethod
   def from_json_file(filename, check_format=True):
     ''' Load an experiment list from a json file. '''
-    from dxtbx.serialize.filename import temp_chdir
     from os.path import dirname, abspath
     filename = abspath(filename)
-    with temp_chdir(dirname(filename)):
-      with open(filename, 'r') as infile:
-        return ExperimentListFactory.from_json(infile.read(), check_format)
+    directory = dirname(filename)
+    with open(filename, 'r') as infile:
+      return ExperimentListFactory.from_json(
+        infile.read(), check_format=check_format, directory=directory)
 
   @staticmethod
   def from_pickle_file(filename):
     ''' Decode an experiment list from a pickle file. '''
-    import cPickle as pickle
+    import six.moves.cPickle as pickle
     with open(filename, 'rb') as infile:
       obj = pickle.load(infile)
-      assert(isinstance(obj, ExperimentList))
-      return obj
+    assert isinstance(obj, ExperimentList)
+    return obj
 
   @staticmethod
   def from_xds(xds_inp, xds_other):

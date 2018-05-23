@@ -43,7 +43,7 @@ master_phil = iotbx.phil.parse("""
       .type = bool
       .help = Try both unique_part_of_target_only as True and False and \
              report result for whichever gives higher value of \
-              fraction matching.
+              fraction matching.  Cannot be used with match_pdb_file
       .short_caption = Test unique target only
 
     allow_extensions = False
@@ -55,10 +55,16 @@ master_phil = iotbx.phil.parse("""
 
     ncs_file = None
       .type = path
-      .help = Select unique part of query. \
+      .short_caption = NCS file
+      .help = NCS file. \
                If unique_query_only is False (typically) \
                apply NCS to it to generate full query.  Normally used with \
-               test_unique_part_of_target_only=True.
+               test_unique_part_of_target_only=True. \
+               NOTE: if your structure has very high symmetry, including \
+               an NCS file can result in extremely long run times. It may \
+               be better in such cases to supply target and query files \
+               that have NCS applied (or matching structures without NCS) \
+               and not to supply an NCS file.
 
     query_dir = None
       .type = path
@@ -145,10 +151,13 @@ class rmsd_values:
     self.n_list=[]
     self.match_percent_list=[]
     self.target_length_list=[]
+    self.total_chain=None
+    self.used_chain=None
     self.total_target=None
     self.total_query=None
     self.used_target=None
     self.used_query=None
+    self.n_fragments_list=[]
 
   def add_match_percent(self,id=None,match_percent=None):
     ipoint=self.id_list.index(id)
@@ -158,12 +167,24 @@ class rmsd_values:
     ipoint=self.id_list.index(id)
     self.target_length_list[ipoint]=target_length
 
-  def add_rmsd(self,id=None,rmsd=None,n=None):
+  def add_fragment_count(self,id=None,n=None):
+    ipoint=self.id_list.index(id)
+    self.fragment_count[ipoint]=n
+
+  def add_rmsd(self,id=None,rmsd=None,n=None,n_fragments=None):
     self.id_list.append(id)
     self.rmsd_list.append(rmsd)
     self.n_list.append(n)
     self.match_percent_list.append(0)
     self.target_length_list.append(0)
+    self.n_fragments_list.append(n_fragments)
+
+  def get_n_fragments(self,id=None):
+    for local_id,local_n_fragments in zip(
+       self.id_list,self.n_fragments_list):
+      if id==local_id:
+        return local_n_fragments
+    return 0
 
   def get_match_percent(self,id=None):
     for local_id,local_match_percent in zip(
@@ -475,9 +496,13 @@ def extract_unique_part_of_sequences(sequence_list=None,
     if not copies_found in copies_list: copies_list.append(copies_found)
   copies_list.sort()
   print >>out,"Numbers of copies of sequences: %s" %(str(copies_list))
+  copies_in_unique={}
+  if not copies_list:
+    print >>out,"\nNothing to compare..."
+    copies_base=0
+    return copies_in_unique,copies_base,unique_sequence_dict
   copies_base=copies_list[0]
   all_ok=True
-  copies_in_unique={}
   if len(copies_list)==1:
     print >>out,"Number of copies of all sequences is: %s" %(copies_base)
     for seq in unique_sequences:
@@ -575,6 +600,9 @@ def extract_unique_part_of_hierarchy(ph,target_ph=None,
     allow_extensions=allow_extensions,
     min_similarity=min_similarity,out=out)
 
+  if not base_copies:
+    print >>out,"Nothing to compare...quitting"
+    return new_hierarchy
   sequences_matching_unique_dict={}
   for seq in sequences:
     unique_seq=unique_sequence_dict[seq]
@@ -750,6 +778,10 @@ def write_summary(params=None,file_list=None,rv_list=None,
       max_dist)
     print >>out,"\nCA SCORE is fraction in close CA / rmsd of these CA."
     print >>out,"\nSEQ SCORE is fraction (close and matching target sequence).\n"
+    print >>out,\
+        "\nMEAN LENGTH is the mean length of contiguous "+\
+        "segments in the match with "+\
+       "target sequence. (Each gap/reverse of direction starts new segment).\n"
 
     print >>out,"\n"
     print >>out,"               ----ALL RESIDUES---  CLOSE RESIDUES ONLY    %"
@@ -757,7 +789,7 @@ def write_summary(params=None,file_list=None,rv_list=None,
               "     MODEL     --CLOSE-    --FAR-- FORWARD REVERSE MIXED"+\
               " FOUND  CA                  SEQ"
     print >>out,"               RMSD   N      N       N       N      N  "+\
-              "        SCORE  SEQ MATCH(%)  SCORE"+"\n"
+              "        SCORE  SEQ MATCH(%)  SCORE  MEAN LENGTH"+"\n"
 
   results_dict={}
   score_list=[]
@@ -782,8 +814,11 @@ def write_summary(params=None,file_list=None,rv_list=None,
     reverse_rmsd,reverse_n=rv.get_values('reverse')
     unaligned_rmsd,unaligned_n=rv.get_values('unaligned')
     match_percent=rv.get_match_percent('close')
-    print >>out,"%14s %4.2f %4d   %4d   %4d    %4d    %4d  %5.1f %6.2f   %5.1f      %6.2f" %(file_name,close_rmsd,close_n,far_away_n,forward_n,
-         reverse_n,unaligned_n,percent_close,score,match_percent,seq_score)
+    fragments=rv.get_n_fragments('forward')+rv.get_n_fragments('reverse')
+    mean_length=close_n/max(1,fragments)
+    print >>out,"%14s %4.2f %4d   %4d   %4d    %4d    %4d  %5.1f %6.2f   %5.1f      %6.2f  %5.1f" %(file_name,close_rmsd,close_n,far_away_n,forward_n,
+         reverse_n,unaligned_n,percent_close,score,match_percent,seq_score,
+         mean_length)
 
 def get_target_length(target_chain_ids=None,hierarchy=None,
      target_length_from_matching_chains=None):
@@ -887,7 +922,7 @@ def get_ncs_obj(file_name,out=sys.stdout):
 
 def apply_ncs_to_hierarchy(ncs_obj=None,
         hierarchy=None,out=sys.stdout):
-  if not ncs_obj or ncs_obj.max_operators()<2:
+  if not ncs_obj or ncs_obj.max_operators()<2 or hierarchy.overall_counts().n_residues<1:
     return hierarchy
   try:
     from phenix.command_line.apply_ncs import apply_ncs as apply_ncs_to_atoms
@@ -908,6 +943,15 @@ def apply_ncs_to_hierarchy(ncs_obj=None,
       out=out)
   new_hierarchy=get_pdb_hierarchy(text=an.output_text)
   return new_hierarchy
+
+def get_fragment_count(forward_match_list):
+  n=0
+  i_last=None
+  for i,j in forward_match_list:
+    if i_last is None or i != i_last+1:
+      n+=1
+    i_last=i
+  return n
 
 def run(args=None,
    ncs_obj=None,
@@ -936,6 +980,12 @@ def run(args=None,
     pass # it is fine
   else:
     raise Sorry("Need target model (pdb_in)")
+  if params.input_files.test_unique_part_of_target_only and  \
+    params.output_files.match_pdb_file:
+    print >>out,"Note: Cannot use test_unique_part_of_target_only "+\
+      "with match_pdb_file...\nturning off test_unique_part_of_target_only"
+    params.input_files.test_unique_part_of_target_only=False
+
   if params.input_files.unique_query_only and \
      params.input_files.unique_part_of_target_only:
     print >>out,"Warning: You have specified unique_query_only and" +\
@@ -1258,7 +1308,8 @@ def run(args=None,
   else:
     rmsd=None
   n=forward_match_rmsd_list.size()
-  rv.add_rmsd(id=id,rmsd=rmsd,n=n)
+  fragments_forward=get_fragment_count(forward_match_list)
+  rv.add_rmsd(id=id,rmsd=rmsd,n=n,n_fragments=fragments_forward)
 
   id='reverse'
   if reverse_match_rmsd_list.size():
@@ -1266,7 +1317,8 @@ def run(args=None,
   else:
     rmsd=None
   n=reverse_match_rmsd_list.size()
-  rv.add_rmsd(id=id,rmsd=rmsd,n=n)
+  fragments_reverse=get_fragment_count(reverse_match_list)
+  rv.add_rmsd(id=id,rmsd=rmsd,n=n,n_fragments=fragments_reverse)
 
   id='unaligned'
   if unaligned_match_rmsd_list.size():

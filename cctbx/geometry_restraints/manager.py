@@ -18,6 +18,7 @@ from scitbx_array_family_flex_ext import reindexing_array
 
 from cctbx.geometry_restraints.linking_class import linking_class
 origin_ids = linking_class()
+from cctbx.geometry_restraints.base_geometry import Base_geometry
 
 #from mmtbx.geometry_restraints.hbond import get_simple_bonds
 
@@ -50,7 +51,7 @@ origin_ids = linking_class()
 #              1 - restraint for NA basepairs
 #              3 - geometry_resraints.edits from users
 
-class manager(object):
+class manager(Base_geometry):
 # This class is documented in
 # http://www.phenix-online.org/papers/iucrcompcomm_aug2004.pdf
   def __init__(self,
@@ -83,6 +84,7 @@ class manager(object):
         max_reasonable_bond_distance=None,
         min_cubicle_edge=5,
         log=StringIO.StringIO()):
+    super(manager, self).__init__()
     if (site_symmetry_table is not None): assert crystal_symmetry is not None
     if (bond_params_table is not None and site_symmetry_table is not None):
       assert bond_params_table.size() == site_symmetry_table.indices().size()
@@ -407,7 +409,7 @@ class manager(object):
       if proxies is not None:
         selected_proxies[i] = proxies.proxy_select(n_seq, iselection)
 
-    return manager(
+    result = manager(
       crystal_symmetry=self.crystal_symmetry,
       site_symmetry_table=selected_site_symmetry_table,
       model_indices=selected_stuff[0],
@@ -433,6 +435,8 @@ class manager(object):
       planarity_proxies=selected_proxies[7],
       parallelity_proxies=selected_proxies[8],
       plain_pairs_radius=self.plain_pairs_radius)
+    result.set_source(source = self.get_source())
+    return result
 
   def discard_symmetry(self, new_unit_cell):
     assert self.site_symmetry_table is not None #XXX lazy

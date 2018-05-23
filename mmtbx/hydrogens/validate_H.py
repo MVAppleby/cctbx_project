@@ -1,6 +1,7 @@
-from __future__ import division
+from __future__ import division, print_function
 from iotbx.pdb import common_residue_names_get_class
 from libtbx import group_args
+from libtbx.str_utils import make_sub_header
 from mmtbx.validation import restraints
 from mmtbx.validation.molprobity import mp_geo
 #from libtbx.utils import Sorry
@@ -30,7 +31,7 @@ def get_atom_info_if_hd(atoms_info):
       atom_info_hd = atom_info
   return atom_info_hd
 
-class validate_H():
+class validate_H(object):
   """ This class is for the validation of H and D atoms, especially for models
   obtained by neutron diffraction."""
   def __init__(self, model, use_neutron_distances):
@@ -54,11 +55,12 @@ class validate_H():
     if not self.model.has_hd:
       #raise Sorry("There are no H or D atoms in the model.")
       return 0
-    # XXX probably check if grm exists?
+    # ensure that grm exists
+    self.model.get_restraints_manager()
 
   def get_missing_h_in_residue(self, residue, mon_lib_srv):
     missing = []
-    ca_xyz, xyz = None, None
+    ca_xyz, xyz, xyzh = None, None, None
     mlq = rotamer_eval.mon_lib_query(residue.resname.strip().upper(), mon_lib_srv)
     if mlq is not None:
       #hd_aliases = mlq.hydrogen_deuterium_aliases()
@@ -71,12 +73,15 @@ class validate_H():
           xyz = atom.xyz
         else:
           atom_name_list.append(atom_name)
+          xyzh = atom.xyz
         if is_deuterium(atom):
           atom_name_list.append(atom_name.replace('D','H',1))
         #if atom_name in hd_aliases:
         #  atom_name_list.append(hd_aliases[atom_name])
       if not ca_xyz:
         ca_xyz = xyz
+      if not ca_xyz:
+        ca_xyz = xyzh
       # Step 1: Get list of expected H and non-H atoms
       reference = []
       atom_dict = mlq.atom_dict()
@@ -117,7 +122,7 @@ class validate_H():
 #            atom_temp = "OP2"
           if atom_temp not in atom_name_list:
             missing.append(atom_name)
-    return xyz, missing
+    return ca_xyz, missing
 
   def missing_hydrogens(self):
     missing_HD_atoms = []
@@ -126,7 +131,7 @@ class validate_H():
     for model in self.pdb_hierarchy.models():
       for chain in model.chains():
         for residue_group in chain.residue_groups():
-          missing = []
+          id_strings, missing, conformers, xyzs = [], [], [], []
           for conformer in residue_group.conformers():
             residue = conformer.only_residue()
             if (get_class(name=residue.resname ) == 'common_water'): continue
@@ -134,14 +139,25 @@ class validate_H():
               residue     = residue,
               mon_lib_srv = self.model.get_mon_lib_srv())
             if missing_list:
-              for atom_name in missing_list:
-                if atom_name not in missing:
-                  missing.append(atom_name)
+              missing.append(missing_list)
+              conformers.append(conformer.altloc)
+              xyzs.append(xyz)
+              id_strings.append(residue.id_str())
           if missing:
-            missing_HD_atoms.append(
-                                    (residue.id_str(),
-                                     missing,
-                                     xyz))
+            # if all conformers lack the same H atoms, only add once
+            if len([list(tupl) for tupl in {tuple(item) for item in missing }]) == 1:
+                missing_HD_atoms.append((id_strings[0],
+                                         missing[0],
+                                         ", ".join(conformers),
+                                         xyzs[0]))
+            # otherwise, add for each conformer
+            else:
+              for missing_list, conformer, id_str, xyz in zip(
+                                        missing, conformers, id_strings, xyzs):
+                missing_HD_atoms.append((id_str,
+                                         missing_list,
+                                         conformer,
+                                         xyz))
     self.missing_HD_atoms = missing_HD_atoms
 
   def get_atom(self, residue_group, name):
@@ -242,8 +258,7 @@ class validate_H():
 
   def get_exchanged_sites_and_curate_swapped(self, pdb_hierarchy):
     self.renamed = []
-    #geometry_restraints = self.model.get_restraints_manager().geometry
-    geometry_restraints = self.model.restraints_manager.geometry
+    geometry_restraints = self.model.get_restraints_manager().geometry
     fsc1 = geometry_restraints.shell_sym_tables[1].full_simple_connectivity()
     get_class = common_residue_names_get_class
     hd_exchanged_sites = {}
@@ -420,6 +435,9 @@ class validate_H():
       count_water_altconf + count_water_no_oxygen == count_water)
     assert (count_water == n_water)
 
+    count_h_other = count_h - count_h_protein - count_h_water
+    count_d_other = count_d - count_d_protein - count_d_water
+
     self.overall_counts_hd = group_args(
       count_h               = count_h,
       count_d               = count_d,
@@ -427,6 +445,8 @@ class validate_H():
       count_d_protein       = count_d_protein,
       count_h_water         = count_h_water,
       count_d_water         = count_d_water,
+      count_h_other         = count_h_other,
+      count_d_other         = count_d_other,
       count_water           = count_water,
       count_water_0h        = count_water_0h,
       count_water_1h        = count_water_1h,
@@ -456,7 +476,8 @@ class validate_H():
     rc = restraints.combined(
            pdb_hierarchy  = self.pdb_hierarchy,
            xray_structure = self.model.get_xray_structure(),
-           geometry_restraints_manager = self.model.restraints_manager.geometry,
+           geometry_restraints_manager = self.model.get_restraints_manager().\
+                                         geometry,
            ignore_hd      = False, # important
            outliers_only  = False,
            use_segids_in_place_of_chainids = False)
@@ -534,9 +555,12 @@ class validate_H():
       self.analyze_hd_sites()
 
   def get_results(self):
+    count_exchanged_sites = None
+    if self.hd_exchanged_sites:
+      count_exchanged_sites = len(self.hd_exchanged_sites)
     return group_args(
         overall_counts_hd     = self.overall_counts_hd,
-        hd_exchanged_sites    = self.hd_exchanged_sites,
+        count_exchanged_sites = count_exchanged_sites,
         hd_sites_analysis     = self.hd_sites_analysis,
         renamed               = self.renamed,
         missing_HD_atoms      = self.missing_HD_atoms,
@@ -547,3 +571,286 @@ class validate_H():
 
   def get_curated_hierarchy(self):
     return self.curated_hierarchy
+
+class validate_H_results(object):
+  '''
+  Controller class for displaying results from validate_H
+  '''
+  def __init__(self, results, log=None):
+    self.results = results
+    self.log = log
+
+  def formatted_print(self, prefix, values, log):
+    maxlen = max([ len(value[0]) for value in values ])
+    for value in values:
+      base_format = '%s%%-%ds: %%i' % (prefix, maxlen)
+      print(base_format % value, file=log)
+
+  def print_overall_results(self, overall_counts_hd, prefix='', log=None):
+    if (log is None):
+      log = self.log
+
+    oc = overall_counts_hd
+
+    make_sub_header('H/D atoms in the input model', out=log)
+    self.hd_overall_values = [
+      ('Total number of hydrogen atoms' , oc.count_h),
+      ('Total number of deuterium atoms' , oc.count_d),
+      ('Number of H atoms (protein)' , oc.count_h_protein),
+      ('Number of D atoms (protein)' , oc.count_d_protein),
+      ('Number of H atoms (water)' , oc.count_h_water),
+      ('Number of D atoms (water)' , oc.count_d_water),
+      ('Number of H atoms (other)' , oc.count_h_other),
+      ('Number of D atoms (other)' , oc.count_d_other),
+    ]
+    self.formatted_print(prefix, self.hd_overall_values, log)
+
+    make_sub_header('Water molecules', out=log)
+    self.hd_water_values = [
+      ('Number of water', oc.count_water),
+      ('Number of water with 0 H (or D)', oc.count_water_0h),
+      ('Number of water with 1 H (or D)', oc.count_water_1h),
+      ('Number of water with 2 H (or D)', oc.count_water_2h),
+      ('Number of water in alternative conformation', oc.count_water_altconf),
+      ('Number of water without oxygen atom', oc.count_water_no_oxygen)
+    ]
+    self.formatted_print(prefix, self.hd_water_values, log)
+
+  def print_renamed(self, renamed, prefix='', log=None):
+    if (log is None):
+      log = self.log
+
+    make_sub_header('The following atoms were renamed:', out=log)
+    for entry in renamed:
+      id_str = entry[0]
+      oldname = entry[2]
+      newname = entry[1]
+      print('%s%s atom %s --> %s' % (prefix, id_str, oldname, newname),
+            file=log)
+
+  def export_renamed_for_wxGUI(self):
+    # last element should be xyz for residue/atom
+    table = list()
+    if (self.results.renamed):
+      for entry in self.results.renamed:
+        table.append([entry[0], entry[2], entry[1], None, entry[-1]])
+    return table
+
+  def print_atoms_occ_lt_1(self, hd_atoms_with_occ_0, single_hd_atoms_occ_lt_1,
+                           prefix='', log=None):
+    if (log is None):
+      log = self.log
+
+    if hd_atoms_with_occ_0:
+      make_sub_header('H (or D) atoms with zero occupancy', out=log)
+      for item in hd_atoms_with_occ_0:
+        print('%s%s' % (prefix, item[0]), file=log)
+    if single_hd_atoms_occ_lt_1:
+      make_sub_header('H (or D) atoms with occupancy < 1', out=log)
+      for item in single_hd_atoms_occ_lt_1:
+        print('%s%s with occupancy %s' % (prefix, item[0], item[1]),
+              file=log)
+
+  def export_occupancies_0_for_wxGUI(self):
+    # last element should be xyz for residue/atom
+    table = list()
+    if (self.results.overall_counts_hd.hd_atoms_with_occ_0):
+      for item in self.results.overall_counts_hd.hd_atoms_with_occ_0:
+        table.append([item[0].split('"')[1], None, item[-1]])
+    return table
+
+  def export_occupancies_lt_1_for_wxGUI(self):
+    # last element should be xyz for residue/atom
+    table = list()
+    if (self.results.overall_counts_hd.single_hd_atoms_occ_lt_1):
+      for item in self.results.overall_counts_hd.single_hd_atoms_occ_lt_1:
+        table.append([item[0].split('"')[1], item[1], None, item[-1]])
+    return table
+
+  def print_results_hd_sites(
+      self, count_exchanged_sites, hd_sites_analysis, overall_counts_hd,
+      prefix='', log=None):
+    if (log is None):
+      log = self.log
+
+    sites_different_xyz = hd_sites_analysis.sites_different_xyz
+    sites_different_b   = hd_sites_analysis.sites_different_b
+    sites_sum_occ_not_1 = hd_sites_analysis.sites_sum_occ_not_1
+    sites_occ_sum_no_scattering = hd_sites_analysis.sites_occ_sum_no_scattering
+
+    make_sub_header('H/D EXCHANGED SITES', out=log)
+    self.hd_exchange_values = [
+      ('Number of H/D exchanged sites', count_exchanged_sites),
+      ('Number of atoms modelled only as H',
+       overall_counts_hd.count_h_protein - count_exchanged_sites),
+      ('Number of atoms modelled only as D',
+       overall_counts_hd.count_d_protein - count_exchanged_sites)
+    ]
+    self.formatted_print(prefix, self.hd_exchange_values, log)
+
+    if sites_different_xyz:
+      print('\n%sH/D pairs not at identical positions:' % prefix, file=log)
+      for item in sites_different_xyz:
+        print('%s  %s and  %s at distance %.3f' % \
+          (prefix, item[0][5:-1], item[1][5:-1], item[2]), file=log)
+
+    if sites_different_b:
+      print('\n%sH/D pairs without identical ADPs:' % prefix, file=log)
+      for item in sites_different_b:
+        print('%s  %s and %s ' % (prefix, item[0][5:-1], item[1][5:-1]),
+              file=log)
+
+    if sites_sum_occ_not_1:
+      print('\n%sH/D pairs with occupancy sum != 1:' % prefix, file=log)
+      for item in sites_sum_occ_not_1:
+        print('%s  %s  and %s with occupancy sum %s' %
+              (prefix, item[0][5:-1], item[1][5:-1], item[2]), file=log)
+
+    if sites_occ_sum_no_scattering:
+      print('\n%sRotatable H/D pairs with zero scattering occupancy sum:' %
+            prefix, file=log)
+      for item in sites_occ_sum_no_scattering:
+        print('%s  %s with occ %s and  %s with occ %s' %
+              (prefix, item[0][5:-1], item[2], item[1][5:-1], item[3]),
+              file=log)
+
+  def export_sites_different_xyz_for_wxGUI(self):
+    # last element should be xyz for residue/atom
+    table = list()
+    result = None
+    if (self.results.hd_sites_analysis):
+      result = self.results.hd_sites_analysis.sites_different_xyz
+    if (result):
+      for item in result:
+        table.append([item[0][5:-1], item[1][5:-1], item[2], None, item[-1]])
+    return table
+
+  def export_sites_different_b_for_wxGUI(self):
+    # last element should be xyz for residue/atom
+    table = list()
+    result = None
+    if (self.results.hd_sites_analysis):
+      result = self.results.hd_sites_analysis.sites_different_b
+    if (result):
+      for item in result:
+        table.append([item[0][5:-1], item[1][5:-1], None, item[-1]])
+    return table
+
+  def export_sites_sum_occ_for_wxGUI(self):
+    # last element should be xyz for residue/atom
+    table = list()
+    result = None
+    if (self.results.hd_sites_analysis):
+      result = self.results.hd_sites_analysis.sites_sum_occ_not_1
+    if (result):
+      for item in result:
+        table.append([item[0][5:-1], item[1][5:-1], item[2], None, item[-1]])
+    return table
+
+  def export_sites_occ_scattering_for_wxGUI(self):
+    # last element should be xyz for residue/atom
+    table = list()
+    result = None
+    if (self.results.hd_sites_analysis):
+      result = self.results.hd_sites_analysis.sites_occ_sum_no_scattering
+    if (result):
+      for item in result:
+        table.append([item[0][5:-1], item[2], item[1][5:-1], item[3],
+                      None, item[-1]])
+    return table
+
+  def print_missing_HD_atoms(self, missing_HD_atoms, prefix, log=None):
+    if (log is None):
+      log = self.log
+
+    make_sub_header('MISSING H or D atoms', out=log)
+    for item in missing_HD_atoms:
+      print('%s%s conformer %s : %s ' % (prefix, item[0][8:-1], item[2], ", ".join(item[1])),
+            file=log)
+
+  def export_missing_HD_atoms_for_wxGUI(self):
+    # last element should be xyz for residue/atom
+    table = list()
+    if (self.results.missing_HD_atoms):
+      for item in self.results.missing_HD_atoms:
+        table.append([item[0][8:-1], item[2], ', '.join(item[1]),
+                      None, item[-1]])
+    return table
+
+  def print_outliers_bonds_angles(self, outliers_bonds, outliers_angles,
+                                  prefix='', log=None):
+    if (log is None):
+      log = self.log
+
+    if outliers_bonds:
+      make_sub_header('Bond outliers', out=log)
+      for item in outliers_bonds:
+        print('%s%s, Bond %s, observed: %.3f, delta from target: %.3f' % \
+          (prefix, item[0], item[1], item[2], item[3]), file=log)
+    if outliers_angles:
+      make_sub_header('Angle outliers', out=log)
+      for item in outliers_angles:
+        print('%s%s, Angle %s, observed: %.3f, delta from target: %.3f' % \
+          (prefix, item[0], item[1], item[2], item[3]), file=self.log)
+
+  def export_outliers_bonds_for_wxGUI(self):
+    # last element should be xyz for residue/atom
+    table = list()
+    if (self.results.outliers_bonds):
+      for item in self.results.outliers_bonds:
+        table.append([item[0], item[1], item[2], item[3], None, item[-1]])
+    return table
+
+  def export_outliers_angles_for_wxGUI(self):
+    # last element should be xyz for residue/atom
+    table = list()
+    if (self.results.outliers_angles):
+      for item in self.results.outliers_angles:
+        table.append([item[0], item[1], item[2], item[3], None, item[-1]])
+    return table
+
+  def print_xray_distance_warning(self):
+    print('*'*79, file=self.log)
+    print(
+      'WARNING: Model has a majority of X-H bonds with X-ray bond lengths.\n \
+      Input was to use neutron distances. Please check your model carefully.',
+      file=self.log)
+    print('*'*79, file=self.log)
+
+  def print_results(self, results=None, prefix= '', log=None):
+    if (results is None):
+      results = self.results
+    if (log is not None):
+      self.log = log
+    assert (results is not None)
+    assert (self.log is not None)
+
+    overall_counts_hd  = results.overall_counts_hd
+    count_exchanged_sites = results.count_exchanged_sites
+    renamed            = results.renamed
+    hd_sites_analysis  = results.hd_sites_analysis
+    missing_HD_atoms   = results.missing_HD_atoms
+    hd_atoms_with_occ_0 = overall_counts_hd.hd_atoms_with_occ_0
+    single_hd_atoms_occ_lt_1 = overall_counts_hd.single_hd_atoms_occ_lt_1
+    outliers_bonds     = results.outliers_bonds
+    outliers_angles    = results.outliers_angles
+    bond_results       = results.bond_results
+
+    if overall_counts_hd:
+      self.print_overall_results(overall_counts_hd, prefix=prefix, log=log)
+    if renamed:
+      self.print_renamed(renamed, prefix=prefix, log=log)
+    if hd_atoms_with_occ_0 or single_hd_atoms_occ_lt_1:
+      self.print_atoms_occ_lt_1(hd_atoms_with_occ_0, single_hd_atoms_occ_lt_1,
+                                prefix=prefix, log=log)
+    if count_exchanged_sites is not None:
+      self.print_results_hd_sites(
+        count_exchanged_sites, hd_sites_analysis, overall_counts_hd,
+        prefix=prefix, log=log)
+    if missing_HD_atoms:
+      self.print_missing_HD_atoms(missing_HD_atoms, prefix=prefix, log=log)
+    if outliers_bonds or outliers_angles:
+      self.print_outliers_bonds_angles(outliers_bonds, outliers_angles,
+                                       prefix=prefix, log=log)
+    if bond_results.xray_distances_used:
+      self.print_xray_distance_warning()

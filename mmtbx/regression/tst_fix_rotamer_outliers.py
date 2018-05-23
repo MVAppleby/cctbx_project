@@ -1,6 +1,6 @@
 from __future__ import division
 
-from mmtbx.utils import fix_rotamer_outliers
+from mmtbx.command_line.fix_rotamer_outliers import run
 import iotbx.pdb
 import mmtbx.model
 
@@ -123,25 +123,25 @@ def exercise_1():
   """ 58 is outlier """
   model = get_necessary_inputs(pdb_str_1)
   # pdb_h.write_pdb_file("fix_rot_out_ex1_start.pdb")
-  pdb_h = fix_rotamer_outliers(
-      model=model,
-      radius=5)
+  model = run(
+      args=[],
+      model=model)
   rotamers = []
   # pdb_h.write_pdb_file("fix_rot_out_ex1_end.pdb")
-  for res in pdb_h.only_chain().only_conformer().residues():
+  for res in model.get_hierarchy().only_chain().only_conformer().residues():
     rotamers.append(model.get_rotamer_manager().evaluate_residue(res))
   # print rotamers
-  assert rotamers == ['m-80', 'p'], rotamers
+  assert rotamers == ['p90', 'p'], rotamers
 
 def exercise_2():
   model = get_necessary_inputs(pdb_str_2)
-  pdb_h = fix_rotamer_outliers(
-      model = model,
-      radius=5)
+  model = run(
+      args=[],
+      model = model)
   rotamers = []
-  for res in pdb_h.only_chain().only_conformer().residues():
+  for res in model.get_hierarchy().only_chain().only_conformer().residues():
     rotamers.append(model.get_rotamer_manager().evaluate_residue(res))
-  assert rotamers == ['mtt180', 'tttt', 'm-30', 'pt', 'p', 'mt-10', 'm-40',
+  assert rotamers == ['mtt180', 'tttt', 't0', 'pt', 'm', 'pt0', 'm-40',
       'EXCEPTION', 'tt', 'tttt'], rotamers
 
 if (__name__ == "__main__"):

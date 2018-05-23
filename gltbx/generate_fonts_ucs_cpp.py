@@ -1,7 +1,8 @@
-from __future__ import division
+from __future__ import absolute_import, division, print_function
 import libtbx.load_env
 from libtbx.str_utils import show_string
-import sys, os
+import os
+import sys
 op = os.path
 
 class font_info(object):
@@ -43,13 +44,13 @@ ENDCHAR
     O.dwidth = None
     O.bbx = None
     O.bitmap = None
-    line = bdf_file.next().strip()
+    line = next(bdf_file).strip()
     if (line == "ENDFONT"):
       return
     assert line.startswith("STARTCHAR ")
     O.label = line.split(None, 1)[1]
     while True:
-      line = bdf_file.next().strip()
+      line = next(bdf_file).strip()
       if (line.startswith("ENCODING ")):
         fields = line.split()
         assert len(fields) == 2
@@ -75,15 +76,15 @@ ENDCHAR
     assert O.encoding is not None
     O.bitmap = []
     while True:
-      line = bdf_file.next().strip()
+      line = next(bdf_file).strip()
       if (line == "ENDCHAR"):
         break
       O.bitmap.append(line)
     assert len(O.bitmap) == O.bbx[1]
 
-  def as_glbitmap(O):
+  def as_glbitmap(self):
     result = []
-    w,h = O.bbx[:2]
+    w,h = self.bbx[:2]
     n_bytes = w//8
     mask = (256**n_bytes)-1
     remainder = w - n_bytes*8
@@ -94,12 +95,12 @@ ENDCHAR
       mask <<= 8-remainder
     n_hex = 2*n_bytes
     padding = "0"*n_hex
-    rows = list(O.bitmap)
+    rows = list(self.bitmap)
     rows.reverse()
     for row in rows:
       v = int((row+padding)[:n_hex],16) & mask
       bytes = []
-      for i in xrange(n_bytes):
+      for i in range(n_bytes):
         bytes.append(v & 255)
         v >>= 8
       bytes.reverse()
@@ -234,19 +235,19 @@ def run(target_dir):
     raise RuntimeError("Cannot find ucs-fonts directory.")
   done_flag_file = op.join(target_dir, "FONTS_UCS_DONE_FLAG_FILE")
   if (op.isfile(done_flag_file)):
-    print "      Info: Re-using existing font cpp files."
-    print "      Hint: Remove %s" % op.join(
-      op.basename(target_dir), op.basename(done_flag_file))
-    print "            to force generation of new font files."
+    print("      Info: Re-using existing font cpp files.")
+    print("      Hint: Remove %s" % op.join(
+      op.basename(target_dir), op.basename(done_flag_file)))
+    print("            to force generation of new font files.")
     return
-  print "      fonts:",
+  print("      fonts:", end=' ')
   for font_info in font_infos:
-    print font_info.short_name,
+    print(font_info.short_name, end=' ')
     sys.stdout.flush()
     convert(
       ucs_fonts_dir=ucs_fonts_dir, target_dir=target_dir, font_info=font_info)
   open(done_flag_file, "w")
-  print
+  print()
 
 if (__name__ == "__main__"):
   run(sys.argv[1])

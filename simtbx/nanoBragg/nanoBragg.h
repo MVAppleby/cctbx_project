@@ -19,6 +19,8 @@
 #include <dxtbx/model/beam.h>
 #include <boost/math/special_functions/erf.hpp>
 #include <boost/math/special_functions/fpclassify.hpp>
+#include <boost_adaptbx/python_streambuf.h>
+#include <omptbx/omp_or_stubs.h>
 
 using boost::math::erf;
 using boost::math::isnan;
@@ -32,7 +34,9 @@ using boost::math::isnan;
 #include <cfloat>
 /* seem to need these on windoze and MacOS */
 #ifndef NAN
-#define NAN strtod("NAN",NULL)
+//#define NAN strtod("NAN",NULL)
+/* this works on Windoze */
+#define NAN sqrt((long double)-1)
 #endif
 #ifndef DBL_MIN
 //#define DBL_MIN 1e-99
@@ -279,6 +283,9 @@ class nanoBragg {
     double dials_origin[4];
     double adc_offset; // = 40.0;
 
+    /* use these to remember "user" inputs */
+    bool user_beam; //=false;
+    bool user_distance; //=false;
 
     /* scattering vectors */
     double incident[4];
@@ -318,6 +325,7 @@ class nanoBragg {
     double ***Fhkl;  // = NULL
     int    hkls;
     double F_latt,F_cell;
+    double F000;        // to mark beam center
     double default_F;   // for spots, usually 0
     double default_Fbg; // for background, usually 0
     double Fbg_highangle,Fbg_lowangle;
@@ -395,8 +403,9 @@ class nanoBragg {
     int psf_radius;
     double photons,photons0,adu;
     double readout_noise, flicker_noise;
-    double calibration_noise;
-    double quantum_gain;
+    double calibration_noise;  // = 0.03
+    double spot_scale; // = 1
+    double quantum_gain;   // = 1
 
     /* interpolation arrays */
     int interpolate; // = 2;
@@ -410,8 +419,8 @@ class nanoBragg {
     int    i1,i2,i3; // =0;
 
     /* unit cell stuff */
-    int user_cell; // = 0;
-    int user_matrix; // = False;
+    bool user_cell; // = false;
+    bool user_matrix; // = False;
     double a_A[4],b_A[4],c_A[4];  // cell vectors in Angstrom
     double a[4];                  // cell vectors in meters
     double b[4];
@@ -561,6 +570,7 @@ class nanoBragg {
 
     /* member function for triggering spot simulation over region of interest */
     void add_nanoBragg_spots();
+    void add_nanoBragg_spots_nks();
 
     /* member function for triggering background simulation */
     void add_background(int oversample, int source);
@@ -576,6 +586,7 @@ class nanoBragg {
 
     /* utility function for outputting an image to examine */
     void to_smv_format(std::string const& fileout, double intfile_scale, int debug_x, int debug_y);
+    void to_smv_format_streambuf(boost_adaptbx::python::streambuf &, double, int const&, int const&) const;
 };
 
 

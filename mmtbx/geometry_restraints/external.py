@@ -23,7 +23,7 @@ if libtbx.env.has_module("amber_adaptbx") :
 if (amber_installed) :
   external_energy_params_str += """
     amber
-      .help = Parameters for using Amber in refinement.  EXPERIMENTAL
+      .help = Parameters for using Amber in refinement.
       .expert_level = 3
     {
       include scope amber_adaptbx.master_phil_str
@@ -54,5 +54,32 @@ if (afitt_installed) :
       .expert_level = 3
     {
       include scope mmtbx.geometry_restraints.afitt.master_phil_str
+    }
+"""
+
+# Schrodinger
+schrodinger_installed = False
+if os.environ.get("SCHRODINGER", None):
+  if os.path.exists(os.environ["SCHRODINGER"]):
+    schrodinger_installed = True
+
+if schrodinger_installed:
+  external_energy_params_str += """
+    schrodinger
+      .help = Parameters for using Schrodinger's force fields.
+      .expert_level = 3
+    {
+      use_schrodinger = False
+        .help = Use Schrodinger supported force field.
+        .type = bool
+      ligand_selection = None
+        .help = Use force field parameters only for selected ligands.
+        .type = atom_selection
+      forcefield = OPLS3e* None
+        .help = Force field to use during refinement.
+        .type = choice
+      maestro_file = None
+        .help = Schrodinger Maestro file containing structure.
+        .type = path
     }
 """

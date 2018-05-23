@@ -3,7 +3,7 @@ from __future__ import division
 '''
 Author      : Lyubimov, A.Y.
 Created     : 12/19/2016
-Last Changed: 11/03/2017
+Last Changed: 03/30/2018
 Description : Module with basic utilities of broad applications in IOTA
 '''
 
@@ -15,6 +15,9 @@ from libtbx import easy_pickle as ep
 from libtbx import easy_run
 
 from collections import Counter
+
+import time
+assert time
 
 
 class InputFinder():
@@ -30,7 +33,8 @@ class InputFinder():
                     as_string=False,
                     ignore_ext=None,
                     ext_only=None,
-                    last=None):
+                    last=None,
+                    min_back=None):
     ''' Runs the 'find' command to recursively get a list of filepaths. Has
     a few advangages over os.walk():
       1. Faster (by quite a lot when lots of files involved)
@@ -49,9 +53,13 @@ class InputFinder():
       newer_than = '-newer {}'.format(last)
     else:
       newer_than = ''
-    command = 'find {} -type f {}'.format(path, newer_than)
-    filepaths = easy_run.fully_buffered(command).stdout_lines
 
+    if min_back is not None:
+      mmin = '-mmin {}'.format(min_back)
+    else:
+      mmin = ''
+    command = 'find {} -type f {} {}'.format(path, newer_than, mmin)
+    filepaths = easy_run.fully_buffered(command).stdout_lines
     if ignore_ext is not None:
       filepaths = [path for path in filepaths if not path.endswith(ignore_ext)]
     elif ext_only is not None:
@@ -233,7 +241,8 @@ class InputFinder():
     except Exception:
       return 'text'
 
-  def get_input(self, path, filter=True, filter_type='image', last=None):
+  def get_input(self, path, filter=True, filter_type='image', last=None,
+                min_back=None):
     ''' Obtain list of files (or single file) from any input; obtain file type in input
     :param path: path to input file(s) or folder(s)
     :return: input_list: list of input file(s) (could be just one file)
@@ -253,7 +262,7 @@ class InputFinder():
       else:
         input_list = [os.path.abspath(path)]
     elif os.path.isdir(path):
-      input_list = self.get_file_list(path, last=last)
+      input_list = self.get_file_list(path, last=last, min_back=min_back)
       suffix = "folder"
 
     if input_list is None:
@@ -274,6 +283,9 @@ class InputFinder():
         input_type = '{} {}'.format(consensus_type, suffix)
       else:
         return [], None
+
+    # sort input by filename
+    input_list = sorted(input_list, key=lambda i: i)
 
     return input_list, input_type
 
@@ -304,7 +316,8 @@ class InputFinder():
   def make_input_list(self, input_entries,
                       filter=False,
                       filter_type=None,
-                      last=None):
+                      last=None,
+                      min_back=None):
     ''' Makes input list from multiple entries
     :param input_entries: a list of input paths
     :return: input list: a list of input files
@@ -315,7 +328,8 @@ class InputFinder():
       if path is not None:
         filepaths, _ = self.get_input(path, filter=filter,
                                       filter_type=filter_type,
-                                      last=last)
+                                      last=last,
+                                      min_back=min_back)
         input_list.extend(filepaths)
     return input_list
 

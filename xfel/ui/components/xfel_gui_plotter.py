@@ -123,6 +123,7 @@ class PopUpCharts(object):
     self.interactive = interactive
 
   def reject_outliers(self, data, iqr_ratio = 1.5):
+    eps = 1e-6
     outliers = flex.bool(len(data), False)
     if iqr_ratio is None:
       return outliers
@@ -131,8 +132,9 @@ class PopUpCharts(object):
     #print "Five number summary: min %.1f, q1 %.1f, med %.1f, q3 %.1f, max %.1f"%(min_x, q1_x, med_x, q3_x, max_x)
     iqr_x = q3_x - q1_x
     cut_x = iqr_ratio * iqr_x
-    outliers.set_selected(data > q3_x + cut_x, True)
-    outliers.set_selected(data < q1_x - cut_x, True)
+    outliers.set_selected(data > q3_x + cut_x + eps, True)
+    outliers.set_selected(data < q1_x - cut_x - eps, True)
+    #print "Rejecting", outliers.count(True), "out of", len(outliers)
     return outliers
 
   def plot_uc_histogram(self, info_list, legend_list, extra_title = None, xsize = 10, ysize = 10, high_vis = False, iqr_ratio = 1.5, ranges = None, title = None):
@@ -231,7 +233,7 @@ class PopUpCharts(object):
           stddev = stats.unweighted_sample_standard_deviation()
         except RuntimeError:
           raise Exception("Not enough data to produce a histogram")
-        varstr = "%.1f +/- %.1f"%(mean, stddev)
+        varstr = "%.2f +/- %.2f"%(mean, stddev)
         if len(legend) > 0:
           dim_legend = legend + separator + varstr
         else:
@@ -286,7 +288,7 @@ class PopUpCharts(object):
         stats = flex.mean_and_variance(angle)
         mean = stats.mean()
         stddev = stats.unweighted_sample_standard_deviation()
-        sub.set_xlabel(r'%s (%.2f +/- %.2f$\circ$)' % (name, mean, stddev)).set_fontsize(text_ratio)
+        sub.set_xlabel(r'%s (%.2f +/- %.2f$^\circ$)' % (name, mean, stddev)).set_fontsize(text_ratio)
         xloc = plt.MaxNLocator(5)
         if not high_vis:
           sub.xaxis.set_major_locator(xloc)
@@ -333,7 +335,7 @@ class PopUpCharts(object):
     fig.suptitle(title + " (%d xtals)" % total)
 
     if not self.interactive:
-      fig.set_size_inches(xsize, ysize)
+      fig.set_size_inches(xsize*1.05+.5, ysize*.95)
       fig.savefig("ucell_tmp.png", bbox_inches='tight', dpi=100)
       plt.close(fig)
       return "ucell_tmp.png"

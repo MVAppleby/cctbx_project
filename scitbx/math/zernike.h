@@ -157,7 +157,7 @@ namespace zernike{
     {
       SCITBX_ASSERT (l_max>0);
       l_max_=l_max;
-      int count=0, n_duplicates=0, lm_count=0;
+      int lm_count=0;
       for (int ll=0; ll<=l_max_; ll++){
         for (int mm=-ll;mm<=ll;mm++){
             scitbx::af::shared<int> tmp2;
@@ -325,7 +325,7 @@ namespace zernike{
     {
       SCITBX_ASSERT (n_max>0);
       n_max_=n_max;
-      int count=0, n_duplicates=0, nl_count=0;
+      int nl_count=0;
       for (int nn=0; nn<=n_max_; nn++){
         for (int ll=0;ll<=nn;ll++){
           // restriction on even / odd
@@ -413,7 +413,6 @@ namespace zernike{
 
        SCITBX_ASSERT(nl.size()==coef.size());
        SCITBX_ASSERT(nl.size()>0 );
-       int this_one;
        bool found_it, global_find=true;
        for (int ii=0;ii<nl.size();ii++){
          found_it = set_coef(nl[ii][0],nl[ii][1],coef[ii]);
@@ -465,7 +464,7 @@ namespace zernike{
     {
       SCITBX_ASSERT (n_max>0);
       n_max_=n_max;
-      int count=0, n_duplicates=0, nl_count=0;
+      int nl_count=0;
       for (int nn=0; nn<=n_max_; nn++){
         for (int ll=0;ll<=nn;ll++){
           // restriction on even / odd
@@ -553,7 +552,6 @@ namespace zernike{
 
        SCITBX_ASSERT(nl.size()==coef.size());
        SCITBX_ASSERT(nl.size()>0 );
-       int this_one;
        bool found_it, global_find=true;
        for (int ii=0;ii<nl.size();ii++){
          found_it = set_coef(nl[ii][0],nl[ii][1],coef[ii]);
@@ -757,7 +755,6 @@ namespace zernike{
 
        SCITBX_ASSERT(nlm.size()==coef.size());
        SCITBX_ASSERT(nlm.size()>0 );
-       int this_one;
        bool found_it, global_find=true;
        for (int ii=0;ii<nlm.size();ii++){
          found_it = set_coef(nlm[ii][0],nlm[ii][1],nlm[ii][2],coef[ii]);
@@ -961,7 +958,6 @@ namespace zernike{
 
        SCITBX_ASSERT(nlm.size()==coef.size());
        SCITBX_ASSERT(nlm.size()>0 );
-       int this_one;
        bool found_it, global_find=true;
        for (int ii=0;ii<nlm.size();ii++){
          found_it = set_coef(nlm[ii][0],nlm[ii][1],nlm[ii][2],coef[ii]);
@@ -1003,11 +999,10 @@ namespace zernike{
   class nss_spherical_harmonics
   {
     public:
-    nss_spherical_harmonics();
     nss_spherical_harmonics(int const& max_l, int const& mangle, log_factorial_generator<FloatType> const& lgf)
     :
-    max_l_(max_l),
     lm_engine_(max_l),
+    max_l_(max_l),
     mangle_(mangle),
     eps_(1e-18)
     {
@@ -1062,7 +1057,7 @@ namespace zernike{
           plm[ indices[0] ] = a;
           if (this_m>0){
                 int neg_lm = lm_engine_.find_lm( this_l , -this_m );
-                plm[ neg_lm ] = neg_legendre(this_l, this_m, b);
+                plm[ neg_lm ] = neg_legendre(this_l, this_m, 0.0);
           }
           // make sure we can go further!
           if (indices.size() > 1){
@@ -1128,8 +1123,6 @@ namespace zernike{
 
     scitbx::af::shared< FloatType > legendre_lm(int const& l, int const& m)
     {
-       // please find the index where to find this polynome
-       int index = lm_engine_.find_lm(l,m);
        scitbx::af::shared< FloatType > result;
        for (int ii=0;ii<mangle_;ii++){
          result.push_back( boost::math::legendre_p(l,m,legendre_argument_[ii]) );

@@ -191,7 +191,7 @@ class Cluster:
           data.append(this_frame)
       else:
           logger.info('skipping item {}'.format(item))
-    print "%d lattices will be analyzed"%(len(data))
+    logger.info("%d lattices will be analyzed"%(len(data)))
 
     return cls(data, _prefix, _message)
 
@@ -235,6 +235,39 @@ class Cluster:
           logger.info('skipping item {}'.format(item))
     print "%d lattices will be analyzed"%(len(data))
 
+    return cls(data, _prefix, _message)
+
+  @classmethod
+  def from_iterable( cls,iterable,
+                     _prefix='cluster_from_iterable',
+                     _message='Made from list of individual cells',
+                     **kwargs):
+    """Constructor to get a cluster from an iterable (a list or tuple).  The
+    file must list unit cell a,b,c,alpha,beta,gamma and space_group_type,
+    each as a single token.
+    :param iterable: a list or a tuple
+    """
+
+    data = []
+    from xfel.clustering.singleframe import CellOnlyFrame
+    from cctbx.uctbx import unit_cell
+    from cctbx.sgtbx import space_group_info
+    from cctbx import crystal
+
+    for j,item in enumerate(iterable):
+      try:
+        assert len(item) == 7
+        unit_cell_params = tuple([float(t) for t in item[0:5]])
+        space_group_type = item[6]
+        uc_init = unit_cell(unit_cell_params)
+        sgi = space_group_info(space_group_type)
+        crystal_symmetry = crystal.symmetry(unit_cell=uc_init, space_group_info=sgi)
+        name = "lattice%07d"%j
+        this_frame = CellOnlyFrame(crystal_symmetry, path=name, name=name)
+        if hasattr(this_frame, 'crystal_symmetry'):
+            data.append(this_frame)
+      except Exception:
+        pass
     return cls(data, _prefix, _message)
 
   @classmethod
@@ -589,6 +622,8 @@ class Cluster:
 
       hcluster.dendrogram(this_linkage,
                           labels=labels,
+                          p=200,
+                          truncate_mode='lastp', # show only the last p merged clusters
                           leaf_font_size=8, leaf_rotation=90.0,
                           color_threshold=threshold, ax=ax)
 

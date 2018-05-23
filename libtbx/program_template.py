@@ -27,8 +27,10 @@ task, but the above functions define a consistent interface.
 More documentation to come
 '''
 
-# Should we stick with multi_out by default here?
-import logging
+import libtbx.phil
+
+from libtbx import citations
+from libtbx.utils import multi_out
 
 # =============================================================================
 class ProgramTemplate(object):
@@ -81,7 +83,26 @@ output {
 '''
 
   # ---------------------------------------------------------------------------
-  def __init__(self, data_manager, params, logger=None):
+  # Advanced features
+
+  # PHIL converters (in a list) for additional PHIL types
+  phil_converters = list()
+
+  # ---------------------------------------------------------------------------
+  # Function for showing default citation for template
+  @staticmethod
+  def show_template_citation(text_width=80, logger=None,
+                             citation_format='default'):
+    assert(logger is not None)
+
+    print('\nGeneral citation for CCTBX:', file=logger)
+    print('-'*text_width, file=logger)
+    print('', file=logger)
+    citations.show_citation(citations.citations_db['cctbx'], out=logger,
+                            format=citation_format)
+
+  # ---------------------------------------------------------------------------
+  def __init__(self, data_manager, params, master_phil=None, logger=None):
     '''
     Common constructor for all programs
 
@@ -103,13 +124,25 @@ output {
     '''
 
     self.data_manager = data_manager
+    self.master_phil = master_phil
     self.params = params
     self.logger = logger
 
     if (self.logger is None):
-      self.logger = logging.getLogger('program')
+      self.logger = multi_out()
+
+    # master_phil should be provided by CCTBXParser or GUI because of
+    # potential PHIL extensions
+    if (self.master_phil is None):
+      self.master_phil = libtbx.phil.parse(
+        self.master_phil_str, process_includes=True)
 
     self.custom_init()
+
+  def header(self, text):
+    print("-"*79, file=self.logger)
+    print(text, file=self.logger)
+    print("*"*len(text), file=self.logger)
 
   # ---------------------------------------------------------------------------
   def custom_init(self):

@@ -222,10 +222,13 @@ namespace dxtbx { namespace model {
     virtual scitbx::af::versa< double, scitbx::af::c_grid<2> > get_B_covariance() const  = 0;
     // Set the covariance matrix
     virtual void set_B_covariance(const scitbx::af::const_ref< double, scitbx::af::c_grid<2> > &cov) = 0;
+    virtual void set_B_covariance_at_scan_points(const scitbx::af::const_ref< double, scitbx::af::c_grid<3> > &cov) = 0;
+    virtual scitbx::af::versa< double, scitbx::af::c_grid<2> > get_B_covariance_at_scan_point(std::size_t index) const  = 0;
+    virtual scitbx::af::versa< double, scitbx::af::c_grid<3> > get_B_covariance_at_scan_points() const  = 0;
     // Get the cell parameter standard deviation
     virtual scitbx::af::small<double,6> get_cell_parameter_sd() = 0;
-    // Get the cell parameter standard deviation
     virtual scitbx::af::small<double,6> get_cell_parameter_sd_no_calc() const = 0;
+    virtual scitbx::af::small<double,6> get_cell_parameter_sd_at_scan_point(std::size_t index) = 0;
     // Get the cell volume standard deviation
     virtual double get_cell_volume_sd_no_calc() const = 0;
     // Get the cell volume standard deviation
@@ -311,6 +314,27 @@ namespace dxtbx { namespace model {
       // set up attributes for unit cell errors
       reset_unit_cell_errors();
     }
+
+    /**
+     * Initialise the crystal
+     *
+     * @param A The A matrix
+     * @param space_group The space group object
+     * @param reciprocal Whether or not the matrix is the direct or reciprocal
+    *         matrix (default: reciprocal)
+     */
+    Crystal(const mat3<double> &A,
+            const cctbx::sgtbx::space_group &space_group,
+            const bool &reciprocal=true)
+      : space_group_(space_group),
+        cell_volume_sd_(0) {
+          if (reciprocal) {
+            set_A(A);
+          }
+          else {
+            set_A(A.inverse());
+          }
+      }
 
     /**
      * Constructor for pickling
@@ -518,6 +542,7 @@ namespace dxtbx { namespace model {
      */
     void reset_scan_points() {
       A_at_scan_points_.clear();
+      cov_B_at_scan_points_ = scitbx::af::versa<double, scitbx::af::c_grid<3> >();
     }
 
     /**
@@ -737,6 +762,38 @@ namespace dxtbx { namespace model {
     }
 
     /**
+     * Set the covariance matrix at scan points. The setting matrix A should be
+     * set at scan-points first, so that the number of scan points is already
+     * known.
+     */
+    void set_B_covariance_at_scan_points(const scitbx::af::const_ref< double, scitbx::af::c_grid<3> > &cov) {
+      if (cov.accessor()[0] == 0) {
+        return;
+      }
+      DXTBX_ASSERT(cov.accessor()[0] == get_num_scan_points());
+      DXTBX_ASSERT(cov.accessor()[1] == 9);
+      DXTBX_ASSERT(cov.accessor()[2] == 9);
+      cov_B_at_scan_points_ = scitbx::af::versa<double, scitbx::af::c_grid<3> >(cov.accessor());
+      std::copy(cov.begin(), cov.end(), cov_B_at_scan_points_.begin());
+    }
+
+    scitbx::af::versa< double, scitbx::af::c_grid<2> > get_B_covariance_at_scan_point(std::size_t index) const {
+      DXTBX_ASSERT(index < cov_B_at_scan_points_.accessor()[0]);
+
+      // Get a const ref to just the data for the scan point
+      scitbx::af::const_ref<double> slice(&cov_B_at_scan_points_[index*81], 9*9);
+
+      // Copy the data and return
+      scitbx::af::versa< double, scitbx::af::c_grid<2> > result(scitbx::af::c_grid<2>(9,9));
+      std::copy(slice.begin(), slice.end(), result.begin());
+      return result;
+    }
+
+    scitbx::af::versa< double, scitbx::af::c_grid<3> > get_B_covariance_at_scan_points() const {
+      return cov_B_at_scan_points_;
+    }
+
+    /**
      * Get the cell parameter standard deviation
      */
     scitbx::af::small<double,6> get_cell_parameter_sd() {
@@ -746,6 +803,15 @@ namespace dxtbx { namespace model {
         calc_cell_parameter_sd();
       }
       return cell_sd_;
+    }
+
+    scitbx::af::small<double,6> get_cell_parameter_sd_at_scan_point(std::size_t index) {
+      mat3<double> B = get_B_at_scan_point(index);
+      scitbx::af::versa< double, scitbx::af::c_grid<2> > cov_B = get_B_covariance_at_scan_point(index);
+      scitbx::af::small<double,6> cell_sd;
+      double cell_volume;
+      calc_cell_parameter_sd(B, cov_B, cell_sd, cell_volume);
+      return cell_sd;
     }
 
     /**
@@ -775,6 +841,15 @@ namespace dxtbx { namespace model {
     }
 
     void calc_cell_parameter_sd() {
+      calc_cell_parameter_sd(B_, cov_B_, cell_sd_, cell_volume_sd_);
+    }
+
+
+    void calc_cell_parameter_sd(
+        const mat3<double> &B,
+        const scitbx::af::versa< double, scitbx::af::c_grid<2> > &cov_B,
+        scitbx::af::small<double,6> &cell_sd,
+        double &cell_volume_sd) {
       // self._cov_B is the covariance matrix of elements of the B matrix. We
       // need to construct the covariance matrix of elements of the
       // transpose of B. The vector of elements of B is related to the
@@ -793,12 +868,12 @@ namespace dxtbx { namespace model {
       // elements of the transpose of B.
       scitbx::af::small<double,81> PcovB(81,0);
       scitbx::af::small<double,81> var_cov(81,0);
-      scitbx::matrix::multiply(&P[0], &cov_B_[0], 9, 9, 9, &PcovB[0]);
+      scitbx::matrix::multiply(&P[0], &cov_B[0], 9, 9, 9, &PcovB[0]);
       scitbx::matrix::multiply(&PcovB[0], &P[0], 9, 9, 9, &var_cov[0]);
 
       // From B = (O^-1)^T we can convert this
       // to the covariance matrix of the real space orthogonalisation matrix
-      mat3<double> Bt = B_.transpose();
+      mat3<double> Bt = B.transpose();
       mat3<double> O = Bt.inverse();
       scitbx::af::versa<double, scitbx::af::c_grid<2> > cov_O =
         detail::matrix_inverse_error_propagation(
@@ -866,7 +941,7 @@ namespace dxtbx { namespace model {
                              a3*b1 - b3*a1,
                              a1*b2 - b1*a2};
       double var_V = detail::multiply_A_B_AT<double>(jacobian4, &cov_O[0], 1, 9, 9);
-      cell_volume_sd_ = std::sqrt(var_V);
+      cell_volume_sd = std::sqrt(var_V);
 
       // For the unit cell angles we need to calculate derivatives of the angles
       // with respect to the elements of O
@@ -912,13 +987,13 @@ namespace dxtbx { namespace model {
       var_gamma = std::max(0.0, var_gamma);
 
       // Set the cell sd values
-      cell_sd_.resize(6);
-      cell_sd_[0] = std::sqrt(var_a);
-      cell_sd_[1] = std::sqrt(var_b);
-      cell_sd_[2] = std::sqrt(var_c);
-      cell_sd_[3] = rad_as_deg(std::sqrt(var_alpha));
-      cell_sd_[4] = rad_as_deg(std::sqrt(var_beta));
-      cell_sd_[5] = rad_as_deg(std::sqrt(var_gamma));
+      cell_sd.resize(6);
+      cell_sd[0] = std::sqrt(var_a);
+      cell_sd[1] = std::sqrt(var_b);
+      cell_sd[2] = std::sqrt(var_c);
+      cell_sd[3] = rad_as_deg(std::sqrt(var_alpha));
+      cell_sd[4] = rad_as_deg(std::sqrt(var_beta));
+      cell_sd[5] = rad_as_deg(std::sqrt(var_gamma));
     }
 
     /**
@@ -926,6 +1001,7 @@ namespace dxtbx { namespace model {
      */
     void reset_unit_cell_errors() {
       cov_B_ = scitbx::af::versa<double, scitbx::af::c_grid<2> >();
+      cov_B_at_scan_points_ = scitbx::af::versa<double, scitbx::af::c_grid<3> >();
       cell_sd_ = scitbx::af::small<double,6>();
       cell_volume_sd_ = 0;
     }
@@ -938,6 +1014,7 @@ namespace dxtbx { namespace model {
     mat3<double> B_;
     scitbx::af::shared< mat3<double> > A_at_scan_points_;
     scitbx::af::versa<double, scitbx::af::c_grid<2> > cov_B_;
+    scitbx::af::versa<double, scitbx::af::c_grid<3> > cov_B_at_scan_points_;
     scitbx::af::small<double,6> cell_sd_;
     double cell_volume_sd_;
   };

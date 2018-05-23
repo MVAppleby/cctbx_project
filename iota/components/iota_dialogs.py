@@ -3,7 +3,7 @@ from __future__ import division
 '''
 Author      : Lyubimov, A.Y.
 Created     : 01/17/2017
-Last Changed: 11/03/2017
+Last Changed: 05/10/2018
 Description : IOTA GUI Dialogs
 '''
 
@@ -212,6 +212,8 @@ class IOTAPreferences(BaseDialog):
     self.mm_timeout_len = self.params.advanced.monitor_mode_timeout_length
     self.random_subset = self.params.advanced.random_sample.flag_on
     self.random_subset_number = self.params.advanced.random_sample.number
+    self.image_range = self.params.advanced.image_range.flag_on
+    self.image_range_string = self.params.advanced.image_range.range
 
     # Queue Preferences
     queue_box = wx.StaticBox(self, label='Multiprocessing Preferences')
@@ -242,7 +244,6 @@ class IOTAPreferences(BaseDialog):
                                       label_size=(120, -1),
                                       label_style='normal',
                                       ctrl_size=(150, -1))
-    # self.custom_queue.Disable()
     queue_sizer.Add(self.custom_queue, flag=wx.LEFT | wx.RIGHT | wx.BOTTOM,
                     border=10)
 
@@ -280,18 +281,26 @@ class IOTAPreferences(BaseDialog):
     adv_sizer.Add(self.chk_mm_timeout, flag=f.stack,  border=10)
     adv_sizer.Add(self.opt_timeout, flag=f.stack, border=10)
 
-    # Random sample preferences
-    self.chk_random_sample = wx.CheckBox(self, label='Process a random subset')
-    self.random_number = ct.SpinCtrl(self,
-                                     label='No. images in subset:',
-                                     label_size=(160, -1),
-                                     label_style='normal',
-                                     ctrl_size=(80, -1),
-                                     ctrl_min=0,
-                                     ctrl_max=5000)
-    self.random_number.Disable()
+    # Sub-sample preferences
+    self.chk_image_range = ct.OptionCtrl(self,
+                                         items=[('range', '')],
+                                         label_size=wx.DefaultSize,
+                                         checkbox=True,
+                                         checkbox_state=False,
+                                         checkbox_label='Image Range: ',
+                                         ctrl_size=(200, -1))
+    adv_sizer.Add(self.chk_image_range, flag=f.stack, border=10)
+
+    self.chk_random_sample = ct.SpinCtrl(self,
+                                         label_size=wx.DefaultSize,
+                                         checkbox=True,
+                                         checkbox_state=False,
+                                         checkbox_label='Random subset: ',
+                                         ctrl_value=100,
+                                         ctrl_size=(80, -1),
+                                         ctrl_min=0,
+                                         ctrl_max=5000)
     adv_sizer.Add(self.chk_random_sample, flag=f.stack, border=10)
-    adv_sizer.Add(self.random_number, flag=f.stack, border=10)
 
     # PRIME prefix
     self.prime_prefix = ct.OptionCtrl(self,
@@ -321,7 +330,6 @@ class IOTAPreferences(BaseDialog):
     self.Bind(wx.EVT_BUTTON, self.onOK, id=wx.ID_OK)
     self.Bind(wx.EVT_CHECKBOX, self.onMonitor, self.chk_cont_mode)
     self.Bind(wx.EVT_CHECKBOX, self.onTimeout, self.chk_mm_timeout)
-    self.Bind(wx.EVT_CHECKBOX, self.onRandom, self.chk_random_sample)
     self.Bind(wx.EVT_BUTTON, self.onTempBrowse, self.temp_folder.btn_browse)
 
     self.Fit()
@@ -372,14 +380,14 @@ class IOTAPreferences(BaseDialog):
         self.opt_timeout.Enable()
         self.opt_timeout.timeout.SetValue(str(self.mm_timeout_len))
 
-    # Set random subset values
+    # Set subset values
     if self.random_subset:
-      self.chk_random_sample.SetValue(True)
-      self.random_number.Enable()
-    else:
-      self.chk_random_sample.SetValue(False)
-      self.random_number.Disable()
-    self.random_number.ctr.SetValue(self.random_subset_number)
+      self.chk_random_sample.toggle_boxes(flag_on=True)
+      self.chk_random_sample.ctr.SetValue(self.random_subset_number)
+
+    if self.image_range:
+      self.chk_image_range.toggle_boxes(flag_on=self.image_range)
+      self.chk_image_range.range.SetValue(noneset(self.image_range_string))
 
     # Set PRIME prefix
     self.prime_prefix.prefix.SetValue(self.params.advanced.prime_prefix)
@@ -427,12 +435,6 @@ class IOTAPreferences(BaseDialog):
       self.opt_timeout.Disable()
       self.opt_timeout.timeout.SetValue('')
 
-  def onRandom(self, e):
-    if self.chk_random_sample.GetValue():
-      self.random_number.Enable()
-    else:
-      self.random_number.Disable()
-
   def onOK(self, e):
     # Get continous mode settings
     self.monitor_mode = self.chk_cont_mode.GetValue()
@@ -457,8 +459,18 @@ class IOTAPreferences(BaseDialog):
       self.queue = None
 
     viewer = self.viewers.ctr.GetString(self.viewers.ctr.GetSelection())
-
     temp_folder = noneset(self.temp_folder.ctr.GetValue())
+
+    if self.chk_random_sample.toggle.IsChecked():
+      random_number = self.chk_random_sample.ctr.GetValue()
+    else:
+      random_number = 0
+
+    if self.chk_image_range.toggle.IsChecked():
+      img_range = self.chk_image_range.range.GetValue()
+    else:
+      img_range = None
+
 
     # test generation of PHIL settings
     prefs_text = '\n'.join([
@@ -471,10 +483,15 @@ class IOTAPreferences(BaseDialog):
       '  monitor_mode_timeout_length = {}'.format(int(self.mm_timeout_len)),
       '  prime_prefix = {}'.format(self.prime_prefix.prefix.GetValue()),
       '  temporary_output_folder = {}'.format(temp_folder),
+      '  image_range',
+      '  {',
+      '    flag_on = {}'.format(self.chk_image_range.toggle.GetValue()),
+      '    range = {}'.format(img_range),
+      '  }',
       '  random_sample',
       '  {',
-      '    flag_on = {}'.format(self.chk_random_sample.GetValue()),
-      '    number = {}'.format(self.random_number.ctr.GetValue()),
+      '    flag_on = {}'.format(self.chk_random_sample.toggle.GetValue()),
+      '    number = {}'.format(random_number),
       '  }',
       '}'
     ])
@@ -631,7 +648,7 @@ class ImportWindow(BaseDialog):
     filepath = self.mod_mask.ctr.GetValue()
     if os.path.isfile(filepath):
       viewer = thr.ImageViewerThread(self,
-                                     backend=self.params.advanced.integrate_with,
+                                     viewer=self.params.advanced.image_viewer,
                                      file_string=filepath)
       viewer.start()
 
@@ -892,14 +909,14 @@ class CCTBXOptions(BaseBackendDialog):
                            label='Grid Search Selection Options')
     sel_box_sizer = wx.StaticBoxSizer(sel_box, wx.VERTICAL)
 
-    self.select_only = wx.CheckBox(self.sel_options, label="Select only")
-    sel_box_sizer.Add(self.select_only, flag=f.stack, border=10)
-
-    self.img_objects_path = ct.InputCtrl(self.sel_options,
-                                         label='Image objects:',
-                                         label_size=(120, -1),
-                                         buttons=True)
-    sel_box_sizer.Add(self.img_objects_path, 1, flag=f.expand, border=10)
+    # self.select_only = wx.CheckBox(self.sel_options, label="Select only")
+    # sel_box_sizer.Add(self.select_only, flag=f.stack, border=10)
+    #
+    # self.img_objects_path = ct.InputCtrl(self.sel_options,
+    #                                      label='Image objects:',
+    #                                      label_size=(120, -1),
+    #                                      buttons=True)
+    # sel_box_sizer.Add(self.img_objects_path, 1, flag=f.expand, border=10)
 
     self.select_by = ct.ChoiceCtrl(self.sel_options,
                                    label='Select by:',
@@ -992,7 +1009,7 @@ class CCTBXOptions(BaseBackendDialog):
     self.Bind(wx.EVT_CHOICE, self.onGSChoice, self.gs_type.ctr)
     self.Bind(wx.EVT_CHOICE, self.onLatChoice, self.target_lattice.ctr)
     self.Bind(wx.EVT_CHOICE, self.onCentChoice, self.target_centering.ctr)
-    self.Bind(wx.EVT_CHECKBOX, self.onSelCheck, self.select_only)
+    # self.Bind(wx.EVT_CHECKBOX, self.onSelCheck, self.select_only)
     self.Bind(wx.EVT_BUTTON, self.onHideScript, self.btn_hide_script)
     self.Bind(wx.EVT_CHOICE, self.onAdvanced, self.dlg_ctr.choice)
 
@@ -1035,8 +1052,8 @@ class CCTBXOptions(BaseBackendDialog):
     self.write_default_phil()
     self.phil.ctr.SetValue(self.target_phil)
 
-  def onSelCheck(self, e):
-    self.img_objects_path.Enable(self.select_only.GetValue())
+  # def onSelCheck(self, e):
+  #   self.img_objects_path.Enable(self.select_only.GetValue())
 
   def onGSChoice(self, e):
     self.set_grid_search(self.gs_type.ctr.GetSelection())
@@ -1144,9 +1161,9 @@ class CCTBXOptions(BaseBackendDialog):
     self.set_grid_search(idx=idx)
     self.signal_search.SetValue(self.params.cctbx.grid_search.sig_height_search)
 
-    # Selection options
-    self.select_only.SetValue(self.params.cctbx.selection.select_only.flag_on)
-    self.img_objects_path.Enable(self.select_only.GetValue())
+    # # Selection options
+    # self.select_only.SetValue(self.params.cctbx.selection.select_only.flag_on)
+    # self.img_objects_path.Enable(self.select_only.GetValue())
 
     idx = self.select_by.ctr.FindString(self.params.cctbx.selection.select_by)
     self.select_by.ctr.SetSelection(idx)
@@ -1236,8 +1253,8 @@ class CCTBXOptions(BaseBackendDialog):
       target_centering = None
 
 
-    # Grid search path (for select-only option)
-    grid_search_path = noneset(self.img_objects_path.ctr.GetValue())
+    # # Grid search path (for select-only option)
+    # grid_search_path = noneset(self.img_objects_path.ctr.GetValue())
 
     # Filter options
     filter_on = bool(self.filt_lattice.toggle.GetValue() +
@@ -1283,11 +1300,11 @@ class CCTBXOptions(BaseBackendDialog):
       '    }',
       '  selection',
       '  {',
-      '    select_only',
-      '    {',
-      '      flag_on = {}'.format(self.select_only.GetValue()),
-      '      grid_search_path = {}'.format(grid_search_path),
-      '    }',
+      # '    select_only',
+      # '    {',
+      # '      flag_on = {}'.format(self.select_only.GetValue()),
+      # '      grid_search_path = {}'.format(grid_search_path),
+      # '    }',
       '    min_sigma = {}'.format(self.min_sigma.sigma.GetValue()),
       '    select_by = {}'.format(self.select_by.ctr.GetString(
         self.select_by.ctr.GetSelection())),
@@ -1670,7 +1687,7 @@ class AnalysisWindow(BaseDialog):
     self.viz_phil = None
 
     # Create options panel (all objects should be called as self.options.object)
-    self.options = ScrolledPanel(self, size=(-1, 200))
+    self.options = ScrolledPanel(self, size=(-1, 250))
     options_sizer = wx.BoxSizer(wx.VERTICAL)
     self.options.SetSizer(options_sizer)
 
@@ -1679,10 +1696,15 @@ class AnalysisWindow(BaseDialog):
 
     # Unit cell clustering options
     self.clustering = ct.OptionCtrl(self.options,
-                                    items=[('threshold', '5000')],
-                                    sub_labels=['Threshold'],
+                                    items=[('threshold', '5000'),
+                                           ('limit', '5'),
+                                           ('n_images', '0')],
+                                    sub_labels=['Threshold', 'Cluster limit',
+                                                'No. images'],
                                     checkbox=True,
                                     checkbox_label='Unit Cell Clustering',
+                                    #sub_label_vertical=wx.ALIGN_TOP,
+                                    grid=(4, 2),
                                     label_size=(160, -1),
                                     ctrl_size=(100, -1))
     viz_box_sizer.Add(self.clustering, flag=f.stack, border=10)
@@ -1730,6 +1752,10 @@ class AnalysisWindow(BaseDialog):
       self.clustering.toggle_boxes(flag_on=True)
       self.clustering.threshold.SetValue(
         str(self.params.analysis.cluster_threshold))
+      self.clustering.limit.SetValue(
+        str(self.params.analysis.cluster_limit))
+      self.clustering.n_images.SetValue(str(
+        self.params.analysis.cluster_n_images))
 
     viz_idx = self.visualization.ctr.FindString(str(self.params.analysis.viz))
     if str(self.params.analysis.viz).lower() == 'none':
@@ -1750,6 +1776,10 @@ class AnalysisWindow(BaseDialog):
       ' run_clustering = {}'.format(self.clustering.toggle.GetValue()),
       ' cluster_threshold = {}'.format(noneset(
           self.clustering.threshold.GetValue())),
+      ' cluster_limit = {}'.format(noneset(
+          self.clustering.limit.GetValue())),
+      ' cluster_n_images = {}'.format(noneset(
+          self.clustering.n_images.GetValue())),
       ' viz = {}'.format(viz),
       ' charts = {}'.format(self.proc_charts.GetValue()),
       ' summary_graphs = {}'.format(self.summary_graphs.GetValue()),
@@ -1983,6 +2013,7 @@ class RecoveryDialog(BaseDialog):
 
     self.pathlist = wx.ListCtrl(self, style=wx.LC_REPORT|wx.LC_SINGLE_SEL)
     self.selected = None
+    self.recovery_mode = 0
 
     self.pathlist.InsertColumn(0, "")
     self.pathlist.InsertColumn(1, "#")
@@ -2002,9 +2033,11 @@ class RecoveryDialog(BaseDialog):
     self.main_sizer.Add(self.pathlist, 1, flag=wx.EXPAND | wx.ALL, border=10)
 
     # Dialog control
-    self.main_sizer.Add(self.CreateSeparatedButtonSizer(wx.OK | wx.CANCEL),
-                        flag=wx.EXPAND | wx.ALIGN_RIGHT | wx.ALL, border=10)
-
+    self.dlg_ctr = ct.DialogButtonsCtrl(self, preset='OK_CANCEL',
+                                        choices=['everything', 'settings only'],
+                                        choice_label='Recover: ')
+    self.main_sizer.Add(self.dlg_ctr, flag=wx.EXPAND | wx.ALIGN_RIGHT | wx.ALL,
+                        border=10)
     self.Bind(wx.EVT_BUTTON, self.onOK, id=wx.ID_OK)
 
 
@@ -2040,6 +2073,7 @@ class RecoveryDialog(BaseDialog):
 
         self.selected = [self.pathlist.GetItemText(i, col=2),
                          self.pathlist.GetItemText(i, col=3)]
+        self.recovery_mode = self.dlg_ctr.choice.GetSelection()
     e.Skip()
 
 class DIALSSpfDialog(BaseDialog):
@@ -2149,8 +2183,8 @@ class DIALSSpfDialog(BaseDialog):
     filepath = self.mod_mask.ctr.GetValue()
     if os.path.isfile(filepath):
       viewer = thr.ImageViewerThread(self,
-                                     backend='dials',
-                                     file_string=filepath)
+                                     file_string=filepath,
+                                     viewer='dials')
       viewer.start()
 
   def read_param_phil(self):
@@ -2201,4 +2235,69 @@ class DIALSSpfDialog(BaseDialog):
                              '}'
                              ])
     self.spf_phil = ip.parse(phil_string)
+    e.Skip()
+
+class ClusterDialog(BaseDialog):
+  def __init__(self, parent,
+               label_style='bold',
+               content_style='normal',
+               *args, **kwargs):
+
+    BaseDialog.__init__(self, parent,
+                        label_style=label_style,
+                        content_style=content_style,
+                        *args, **kwargs)
+
+    self.main_sizer = wx.BoxSizer(wx.VERTICAL)
+    self.SetSizer(self.main_sizer)
+
+    # Clustering parameters
+    self.cluster_options = wx.Panel(self)
+    cluster_box = wx.StaticBox(self.cluster_options, label='Cluster Parameters')
+    cluster_box_sizer = wx.StaticBoxSizer(cluster_box, wx.VERTICAL)
+    self.cluster_options.SetSizer(cluster_box_sizer)
+
+    self.write_files = wx.CheckBox(self.cluster_options,
+                                   label='Write Cluster Files')
+    cluster_box_sizer.Add(self.write_files, flag=f.stack, border=10)
+
+    self.cluster_n_images = ct.SpinCtrl(self.cluster_options,
+                                        label_size=wx.DefaultSize,
+                                        checkbox_state=False,
+                                        checkbox_label='No. images',
+                                        checkbox=True,
+                                        ctrl_size=(100, -1),
+                                        ctrl_value=1000)
+    cluster_box_sizer.Add(self.cluster_n_images, flag=f.expand, border=10)
+
+    self.cluster_threshold = ct.SpinCtrl(self.cluster_options,
+                                         label='Threshold: ',
+                                         label_size=wx.DefaultSize,
+                                         ctrl_size=(100, -1),
+                                         ctrl_value=5000)
+    cluster_box_sizer.Add(self.cluster_threshold, flag=f.expand, border=10)
+
+    self.cluster_limit = ct.SpinCtrl(self.cluster_options,
+                                         label='Minimum cluster size: ',
+                                         label_size=wx.DefaultSize,
+                                         ctrl_size=(100, -1),
+                                         ctrl_value=10)
+    cluster_box_sizer.Add(self.cluster_limit, flag=wx.EXPAND | wx.ALL,
+                          border=10)
+
+    # Dialog control
+    dialog_box = self.CreateSeparatedButtonSizer(wx.OK | wx.CANCEL)
+
+    self.main_sizer.Add(self.cluster_options, 1,
+                        flag=wx.EXPAND | wx.ALL, border=10)
+    self.main_sizer.Add(dialog_box,
+                        flag=wx.EXPAND | wx.ALIGN_RIGHT | wx.ALL,
+                        border=10)
+
+    # Bindings:
+    self.Bind(wx.EVT_BUTTON, self.onOK, id=wx.ID_OK)
+
+    self.Fit()
+
+  def onOK(self, e):
     e.Skip()

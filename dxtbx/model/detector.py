@@ -1,11 +1,5 @@
-from __future__ import absolute_import, division
-#!/usr/bin/env python
-# detector.py
-#   Copyright (C) 2011 Diamond Light Source, Graeme Winter
-#
-#   This code is distributed under the BSD license, a copy of which is
-#   included in the root directory of this package.
-#
+from __future__ import absolute_import, division, print_function
+
 # A model for the detector for the "updated experimental model" project
 # documented in internal ticket #1555. This is not designed to be used outside
 # of the XSweep classes. N.B. this should probably be generalized for non
@@ -408,6 +402,7 @@ class DetectorFactory:
     '''
     from dxtbx.model.detector_helpers import set_detector_distance
     from dxtbx.model.detector_helpers import set_mosflm_beam_centre
+    from dxtbx.model.detector_helpers import set_slow_fast_beam_centre_mm
 
     # Check the input. If no reference detector is provided then
     # Create the detector model from scratch from the parameters
@@ -430,16 +425,21 @@ class DetectorFactory:
 
     # If the slow fast beam centre is set then update
     if params.detector.slow_fast_beam_centre is not None:
-      assert beam is not None
-      beam_s, beam_f = params.detector.slow_fast_beam_centre[0:2]
-      pnl = 0
+      panel_id = 0
       if len(params.detector.slow_fast_beam_centre) > 2:
-        pnl = params.detector.slow_fast_beam_centre[2]
-      try:
-        p = detector[pnl]
-      except RuntimeError:
-        raise Sorry('Detector does not have panel index {0}'.format(pnl))
-      beam.set_unit_s0(p.get_pixel_lab_coord((beam_f, beam_s)))
+        panel_id = params.detector.slow_fast_beam_centre[2]
+      if panel_id >= len(detector):
+        raise Sorry('Detector does not have panel index {0}'.format(panel_id))
+      px_size_f, px_size_s = detector[0].get_pixel_size()
+      slow_fast_beam_centre_mm = (
+          params.detector.slow_fast_beam_centre[0] * px_size_s,
+          params.detector.slow_fast_beam_centre[1] * px_size_f)
+      assert beam is not None
+      set_slow_fast_beam_centre_mm(
+        detector,
+        beam,
+        slow_fast_beam_centre_mm,
+        panel_id=panel_id)
 
     # Return the model
     return detector
@@ -482,27 +482,23 @@ class DetectorFactory:
 
     if px_mm is None:
       px_mm = SimplePxMmStrategy()
-    try:
-      d = Detector()
-      p = d.add_panel()
-      p.set_type(str(stype))
-      p.set_name(str(name))
-      p.set_local_frame(
-          tuple(map(float, fast_axis)),
-          tuple(map(float, slow_axis)),
-          tuple(map(float, origin)))
-      p.set_pixel_size(tuple(map(float, pixel_size)))
-      p.set_image_size(tuple(map(int, image_size)))
-      p.set_trusted_range(tuple(map(float, trusted_range)))
-      p.set_thickness(thickness)
-      p.set_material(material)
-      p.set_px_mm_strategy(px_mm)
-      p.set_identifier(identifier)
-      if gain is not None:
-        p.set_gain(gain)
-    except Exception as e:
-      print e
-      raise e
+    d = Detector()
+    p = d.add_panel()
+    p.set_type(str(stype))
+    p.set_name(str(name))
+    p.set_local_frame(
+        tuple(map(float, fast_axis)),
+        tuple(map(float, slow_axis)),
+        tuple(map(float, origin)))
+    p.set_pixel_size(tuple(map(float, pixel_size)))
+    p.set_image_size(tuple(map(int, image_size)))
+    p.set_trusted_range(tuple(map(float, trusted_range)))
+    p.set_thickness(thickness)
+    p.set_material(material)
+    p.set_px_mm_strategy(px_mm)
+    p.set_identifier(identifier)
+    if gain is not None:
+      p.set_gain(gain)
     return d
 
   @staticmethod

@@ -1,4 +1,4 @@
-from __future__ import division
+from __future__ import absolute_import, division, print_function
 from scitbx.source_generators import utils
 import sys
 
@@ -27,51 +27,42 @@ unsigned = (
 
 floating = ("float", "double")
 
-class pair(object):
-
-  def __init__(self, lhs, rhs):
-    self.lhs = lhs
-    self.rhs = rhs
-  def __cmp__(self, other):
-    if (self.lhs == other.lhs and self.rhs == other.rhs): return 0
-    return 1
-
-special_pairs = (
-  (pair("double", "std::complex<float>"), "std::complex<double>"),
-  (pair("std::complex<float>", "double"), "std::complex<double>"),
-)
+special_pairs = {
+  ("double", "std::complex<float>"): "std::complex<double>",
+  ("std::complex<float>", "double"): "std::complex<double>",
+}
 
 def build_pairs():
   op_types = []
   result_type = []
-  for i in xrange(len(types_ordered)):
-    for j in xrange(len(types_ordered)):
-      op_types.append(pair(types_ordered[i], types_ordered[j]))
+  for i, itype in enumerate(types_ordered):
+    for j, jtype in enumerate(types_ordered):
+      op_types.append((itype, jtype))
       if (i >= j):
         result_type.append(0)
       else:
-        result_type.append(types_ordered[j])
+        result_type.append(jtype)
   for unsigned_t in unsigned:
     for floating_t in floating:
-      op_types.append(pair(unsigned_t, floating_t))
+      op_types.append((unsigned_t, floating_t))
       result_type.append(floating_t)
-      op_types.append(pair(floating_t, unsigned_t))
+      op_types.append((floating_t, unsigned_t))
       result_type.append(floating_t)
-  for op_t, result_t in special_pairs:
-    result_type[op_types.index(op_t)] = result_t
+  for op_t in special_pairs:
+    result_type[op_types.index(op_t)] = special_pairs[op_t]
   return op_types, result_type
 
 def run(target_dir):
   op_types, result_type = build_pairs()
   assert len(op_types) == len(result_type)
   if ("--Raw" in sys.argv):
-    for i in xrange(len(op_types)):
-      print >> f, "%s + %s = %s" % (
-        op_types[i].lhs, op_types[i].rhs, result_type[i])
+    for i, optype in enumerate(op_types):
+      print("%s + %s = %s" % (
+        optype[0], optype[1], result_type[i]), file=f)
   else:
     f = utils.join_open(target_dir, "operator_traits_builtin.h", "w")
     utils.write_this_is_auto_generated(f, this)
-    print >> f, """\
+    print("""\
 #ifndef SCITBX_ARRAY_FAMILY_OPERATOR_TRAITS_BUILTIN_H
 #define SCITBX_ARRAY_FAMILY_OPERATOR_TRAITS_BUILTIN_H
 
@@ -89,21 +80,21 @@ namespace scitbx { namespace af {
 
   // The remainder of this file defines the traits where the
   // result type is the type of the rhs argument.
-"""
+""", file=f)
 
-    for i in xrange(len(op_types)):
+    for i, optype in enumerate(op_types):
       if (result_type[i]):
-        print >> f, """  template<>
+        print("""  template<>
   struct binary_operator_traits<%s, %s > {
     typedef %s arithmetic;
   };
-""" % (op_types[i].lhs, op_types[i].rhs, result_type[i])
+""" % (optype[0], optype[1], result_type[i]), file=f)
 
-    print >> f, "}} // namespace scitbx::af"
-    print >> f
-    print >> f, "#endif // DOXYGEN_SHOULD_SKIP_THIS"
-    print >> f
-    print >> f, "#endif // SCITBX_ARRAY_FAMILY_OPERATOR_TRAITS_BUILTIN_H"
+    print("}} // namespace scitbx::af", file=f)
+    print(file=f)
+    print("#endif // DOXYGEN_SHOULD_SKIP_THIS", file=f)
+    print(file=f)
+    print("#endif // SCITBX_ARRAY_FAMILY_OPERATOR_TRAITS_BUILTIN_H", file=f)
     f.close()
 
 if (__name__ == "__main__"):

@@ -1,23 +1,29 @@
-IOTA v1.1.026 - interface updates
+IOTA v1.1.031 - HKL slice viewer
 
 Bugfixes:
-
-1. Added more descriptive error message ("No reflections left after outliers
-are removed") to outlier_detection.py
-2. Image tracker: went to update by timer; interface works smoother
-3. More sophisticated filter for file-finding; can now filter by any keyword
-4. Added an advanced 'flip_beamXY' param:
-   - flips X and Y axes when cropping / padding image (orientation unaffected)
-   - flips beamXY coordinates to match
-   - this resolves a "beamX > beamY" bug during image modification for cctbx
+- Spin Control: checkbox actually shown as checked if parameter is set to True
+in the read-in PHIL settings
+- Fixed recovery of run w/o results
+- Fixed BeamXY adjustment for DIALS (changed beamX and beamY to int)
+- Double-clicking on summary chart works again
+- Correct summary displayed in recovered run
 
 Features:
+- The HKL slice viewer (a part of "charts" tab) can now be set to show the
+general completeness for any space / point group
+- The chart tab has been reorganized for potential insertion of other widgets
+for each of the chart panels; this has the side effect of improving the
+presentation of the HKL slice viewer.
+- IOTA Properties: user can supply a range of images, or several ranges, e.g.
+"5-100, 200-1000, 1234, 1500-1550"; random subset can also be taken from these
+ranges, if enabled
+- Sped up HKL slice viewer by a factor of ~5
+- Changed defaults:
+  - DIALS is the default backend
+  - Gain estimate turned off by default
+  - Auto-threshold turned off by default
+  - Use FFT3D turned on by default
 
-1. Image tracker: Added function to write out list of inspected images to file
-(user can now pick out images to process from a large dataset via inspection)
-2. Added separate spotfinder thread; tracker runs a bit faster as a result
 
 
 Known issues:
-
-1. Image tracker: interface could use to be faster w/ large datasets

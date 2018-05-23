@@ -1,29 +1,7 @@
-#!/usr/bin/env python
-#
-# dxtbx.serialize.imageset.py
-#
-#  Copyright (C) 2013 Diamond Light Source
-#
-#  Author: James Parkhurst
-#
-#  This code is distributed under the BSD license, a copy of which is
-#  included in the root directory of this package.
-from __future__ import absolute_import, division
-from contextlib import contextmanager
+from __future__ import absolute_import, division, print_function
+import os
 
-@contextmanager
-def temp_chdir(path):
-  ''' A context manager to temporarily change the current directory, perform a
-  task and then change back to the previous working directory. '''
-  from os import getcwd, chdir
-  cwd = getcwd()
-  try:
-    chdir(path)
-    yield
-  finally:
-    chdir(cwd)
-
-def load_path(path):
+def load_path(path, directory=None):
   ''' Load a filename from a JSON file.
 
   First expand any environment and user variables. Then create the absolute path
@@ -34,7 +12,9 @@ def load_path(path):
     path The path to the file.
 
   '''
-  from os.path import abspath, expanduser, expandvars
-  if path is None or path == "":
+  if not path:
     return ""
-  return abspath(expanduser(expandvars(path)))
+  path = os.path.expanduser(os.path.expandvars(path))
+  if directory and not os.path.isabs(path):
+    path = os.path.join(directory, path)
+  return os.path.abspath(path)

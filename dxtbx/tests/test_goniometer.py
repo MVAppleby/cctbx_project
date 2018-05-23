@@ -14,6 +14,7 @@ from dxtbx.model.goniometer import Goniometer, MultiAxisGoniometer
 from dxtbx.model.goniometer import GoniometerFactory
 from libtbx import easy_pickle
 from libtbx.test_utils import Exception_expected
+from scitbx import matrix
 
 def compare_tuples(a, b, tol = 1.0e-6):
 
@@ -102,8 +103,6 @@ def test_goniometer():
   kappa2 = easy_pickle.loads(s)
   assert kappa == kappa2
 
-  print 'OK'
-
 def test_multi_axis_goniometer():
   from libtbx.test_utils import approx_equal
   from scitbx.array_family import flex
@@ -185,8 +184,6 @@ def test_multi_axis_goniometer():
   assert single_axis.get_setting_rotation() == (1,0,0,0,1,0,0,0,1)
   assert single_axis.get_rotation_axis() == (1,0,0)
 
-  print 'OK'
-
 def test_goniometer_from_phil():
   from dxtbx.model.goniometer import GoniometerFactory
   from dxtbx.model.goniometer import goniometer_phil_scope
@@ -235,10 +232,74 @@ def test_goniometer_from_phil():
 
   assert tuple(g4.get_axes()) == ((0, 1, 0), (1, 0, 0), (0, 0, 1))
 
-  print 'OK'
+def test_scan_varying():
+
+  axis = (1, 0, 0)
+  g = Goniometer(axis)
+
+  assert g.get_num_scan_points() == 0
+  assert g.get_setting_rotation_at_scan_points().size() == 0
+  try:
+    g.get_setting_rotation_at_scan_point(0) # should raise RuntimeError
+  except RuntimeError:
+    pass
+
+  # set varying beam
+  num_scan_points = 11
+  S_static = matrix.sqr(g.get_setting_rotation())
+  S_as_scan_points = [S_static]
+  axis = matrix.col.random(3, -1., 1.).normalize()
+  R = axis.axis_and_angle_as_r3_rotation_matrix(angle=0.01, deg=True)
+  for i in range(num_scan_points-1):
+    S_as_scan_points.append(R * S_as_scan_points[-1])
+  g.set_setting_rotation_at_scan_points(S_as_scan_points)
+  assert g.get_num_scan_points() == 11
+  assert g.get_setting_rotation_at_scan_points().size() == 11
+
+  for t in range(num_scan_points):
+    S_t = matrix.sqr(g.get_setting_rotation_at_scan_point(t))
+    assert S_t == S_as_scan_points[t]
+
+  # also test setting as tuple
+  g.set_setting_rotation_at_scan_points(tuple(S_as_scan_points))
+  assert g.get_num_scan_points() == 11
+  assert g.get_setting_rotation_at_scan_points().size() == 11
+
+  # test resetting
+  g.reset_scan_points()
+  assert g.get_num_scan_points() == 0
+  assert g.get_setting_rotation_at_scan_points().size() == 0
+
+def test_comparison():
+
+  # Setting rotation for small random offset
+  offset_ax = matrix.col.random(3, -1., 1.).normalize()
+  S = offset_ax.axis_and_angle_as_r3_rotation_matrix(angle=0.01, deg=True)
+
+  # Equal goniometers with scan-points set
+  g1 = Goniometer((1, 0, 0))
+  g1.set_setting_rotation(S)
+  g1.set_setting_rotation_at_scan_points([S] * 5)
+  g2 = Goniometer((1, 0, 0))
+  g2.set_setting_rotation(S)
+  g2.set_setting_rotation_at_scan_points([S] * 5)
+
+  assert g1 == g2
+  assert g1.is_similar_to(g2)
+
+  # Different setting matrix
+  g3 = Goniometer((1, 0, 0))
+  invS = S.inverse()
+  g3.set_setting_rotation(invS)
+  g3.set_setting_rotation_at_scan_points([invS] * 5)
+
+  assert g1 != g3
+  assert not g1.is_similar_to(g3)
 
 if __name__ == '__main__':
 
   test_goniometer()
   test_multi_axis_goniometer()
   test_goniometer_from_phil()
+  test_scan_varying()
+  test_comparison()

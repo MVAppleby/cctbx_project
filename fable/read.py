@@ -1,4 +1,5 @@
-from __future__ import division
+from __future__ import absolute_import, division, print_function
+import collections
 from fable \
   import unsigned_integer_scan, \
   identifier_scan, \
@@ -81,7 +82,7 @@ class source_line(raise_errors_mixin):
     return O, i
 
   def __init__(O, global_line_index_generator, file_name, line_number, text):
-    O.global_line_index = global_line_index_generator.next()
+    O.global_line_index = next(global_line_index_generator)
     O.file_name = file_name
     O.line_number = line_number
     O.text = text
@@ -458,14 +459,14 @@ def combine_continuation_lines_and_strip_spaces(source_lines):
       assert not sl.is_cont
       code_sls = [sl]
       k_sl = i_sl
-      for j_sl in xrange(i_sl+1, n_sl):
+      for j_sl in range(i_sl+1, n_sl):
         sl = source_lines[j_sl]
         if (sl.is_cont):
           code_sls.append(sl)
           k_sl = j_sl
         elif (sl.stmt_offs is not None):
           break
-      for j_sl in xrange(i_sl+1, k_sl):
+      for j_sl in range(i_sl+1, k_sl):
         sl = source_lines[j_sl]
         if (not sl.is_cont):
           rapp(strip_spaces_separate_strings(source_line_cluster=[sl]))
@@ -533,7 +534,7 @@ def tokenize_expression_impl(
       allow_commas,
       allow_equal_signs,
       tok_opening_parenthesis):
-  from tokenization import tk_seq, tk_parentheses
+  from fable.tokenization import tk_seq, tk_parentheses
   if (allow_commas):
     tlist = []
     tokens.append(tk_seq(ssl=tokenizer.ssl, i_code=tokenizer.i, value=tlist))
@@ -2152,18 +2153,18 @@ class fproc(fproc_p_methods):
   def show_fdecl(O):
     "for debugging; not exercised"
     assert O.fdecl_by_identifier is not None
-    print O.name.value
+    print(O.name.value)
     for key in sorted(O.fdecl_by_identifier.keys()):
       fdecl = O.fdecl_by_identifier[key]
-      print " ", fdecl.id_tok.value
-      print "   ", fdecl.var_type
+      print(" ", fdecl.id_tok.value)
+      print("   ", fdecl.var_type)
       if (fdecl.var_storage is not None):
-        print "   ", fdecl.var_storage
+        print("   ", fdecl.var_storage)
       if (fdecl.data_type is not None):
-        print "   ", fdecl.data_type.value
+        print("   ", fdecl.data_type.value)
       if (fdecl.parameter_assignment_tokens is not None):
-        print "    parameter"
-    print
+        print("    parameter")
+    print()
 
   def build_fdecl_by_identifier(O):
     if (not O.body_lines_processed_already):
@@ -2547,9 +2548,8 @@ class fproc(fproc_p_methods):
   def fmt_counts_by_statement_label(O):
     assert O.body_lines_processed_already
     result = O._fmt_counts_by_statement_label
-    if (result is None):
-      from libtbx import dict_with_default_0
-      result = dict_with_default_0()
+    if result is None:
+      result = collections.defaultdict(lambda: 0)
       for ei in O.executable:
         if (ei.key in ["read", "write", "print"] and ei.fmt_tokens is None):
           tl = ei.cilist.fmt
@@ -2583,7 +2583,7 @@ class fproc(fproc_p_methods):
           key_cluster=[tok_seq.value[0].value for tok_seq in equiv_tok.value])
       cu.tidy()
       result = equivalence_info()
-      for i in xrange(len(cu.unions)):
+      for i in range(len(cu.unions)):
         result.equiv_tok_clusters.append([])
       for equiv_tok in O.equivalence:
         result.equiv_tok_clusters[
@@ -2884,9 +2884,9 @@ class split_fprocs(object):
 
   def show_counts_by_type(O, out=None, prefix=""):
     if (out is None): out = sys.stdout
-    print >> out, prefix + "Counts by Fortran procedure type:"
+    print(prefix + "Counts by Fortran procedure type:", file=out)
     for attr in O.__slots__[:4]:
-      print >> out, prefix + "  %s: %s" % (attr, len(getattr(O, attr)))
+      print(prefix + "  %s: %s" % (attr, len(getattr(O, attr))), file=out)
 
   def process_body_lines(O):
     for fproc in O.all_in_input_order:
@@ -2917,8 +2917,7 @@ class split_fprocs(object):
               else:
                 msg.append(name.format_error(
                   msg="%d. definition" % len(msg), prefix="  "))
-            from libtbx.utils import Sorry
-            raise Sorry("\n".join(msg))
+            sys.exit("\n".join(msg))
           O._fprocs_by_name[fproc.name.value] = fproc
           if (fproc.name_plain is not None):
             O._fprocs_by_name_plain[fproc.name_plain.value] = fproc

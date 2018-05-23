@@ -174,7 +174,7 @@ def get_ncs_from_text(text=None,text_is_ncs_spec=None,rotate_about_z=None,
 
 
 def get_helical_symmetry(helical_rot_deg=None,
-     helical_trans_z_angstrom=None):
+     helical_trans_z_angstrom=None,max_ops=None):
 
   from scitbx import matrix
   rot=get_rot_z(rot_deg=helical_rot_deg)
@@ -182,6 +182,7 @@ def get_helical_symmetry(helical_rot_deg=None,
   trans_along_z=matrix.col((0,0,helical_trans_z_angstrom))
 
   n=max(2,int(360/helical_rot_deg))
+  if max_ops and n> max(1,max_ops//2): n= max(1,max_ops//2)
   rots=[]
   trans=[]
   rots.append(matrix.sqr((1,0,0,0,1,0,0,0,1),))
@@ -258,7 +259,8 @@ class ncs_group:  # one group of NCS operators and center and where it applies
   def __init__(self, ncs_rota_matr=None, center_orth=None, trans_orth=None,
       chain_residue_id=None,source_of_ncs_info=None,rmsd_list=None,
       ncs_domain_pdb=None,
-      residues_in_common_list=None,cc=None,exclude_h=None,exclude_d=None):
+      residues_in_common_list=None,cc=None,note=None,
+       exclude_h=None,exclude_d=None):
     self._chain_residue_id=chain_residue_id  # just one of these
     self._rmsd_list=rmsd_list
     self._residues_in_common_list=residues_in_common_list
@@ -274,7 +276,7 @@ class ncs_group:  # one group of NCS operators and center and where it applies
     self._source_of_ncs_info=source_of_ncs_info
     self._ncs_domain_pdb=ncs_domain_pdb
     self._cc=cc
-
+    self._note=note
     self._exclude_h=exclude_h
     self._exclude_d=exclude_d
     self._have_helical_symmetry=False
@@ -325,7 +327,7 @@ class ncs_group:  # one group of NCS operators and center and where it applies
         # T' =  T + t - R t
         new_list_of_matrices.append(deepcopy(ncs_r))  # these are the same
         from scitbx import matrix
-        delta = ncs_r * coordinate_offset
+        delta = ncs_r * matrix.col(coordinate_offset)
         t_prime=matrix.col(ncs_t) + \
           matrix.col(coordinate_offset) - matrix.col(delta)
         new_list_of_translations.append(t_prime)
@@ -419,7 +421,7 @@ class ncs_group:  # one group of NCS operators and center and where it applies
       return self.deep_copy_order(
          hierarchy_to_match_order=hierarchy_to_match_order)
 
-    if ops_to_keep:
+    if ops_to_keep is not None:
       return self.deep_copy_ops_to_keep(ops_to_keep=ops_to_keep)
 
     if extract_point_group_symmetry:
@@ -452,6 +454,7 @@ class ncs_group:  # one group of NCS operators and center and where it applies
     new._source_of_ncs_info=self._source_of_ncs_info
     new._ncs_domain_pdb=deepcopy(self._ncs_domain_pdb)
     new._cc=deepcopy(self._cc)
+    new._note=deepcopy(self._note)
     new._exclude_h=self._exclude_h
     new._exclude_d=self._exclude_d
     return new
@@ -577,6 +580,7 @@ class ncs_group:  # one group of NCS operators and center and where it applies
     new._source_of_ncs_info=self._source_of_ncs_info
     new._ncs_domain_pdb=deepcopy(self._ncs_domain_pdb)
     new._cc=deepcopy(self._cc)
+    new._note=deepcopy(self._note)
     new._exclude_h=self._exclude_h
     new._exclude_d=self._exclude_d
 
@@ -640,6 +644,8 @@ class ncs_group:  # one group of NCS operators and center and where it applies
         text+="\nNCS domains represented by: "+str(self._ncs_domain_pdb)
       if self._cc:
         text+="\nCorrelation of NCS: "+str(self._cc)
+      if self._note:
+        text+="\nNOTE: "+str(self._note)
       for center,trans_orth,ncs_rota_matr in zip (
          self._centers, self._translations_orth,self._rota_matrices):
         if center is None: continue
@@ -687,6 +693,7 @@ class ncs_group:  # one group of NCS operators and center and where it applies
 
     text="\nnew_ncs_group\n"
     if self._cc is not None: text+="NCS_CC "+str(self._cc)+"\n"
+    if self._note is not None: text+="NOTE "+str(self._note)+"\n"
     if self._ncs_domain_pdb is not None:
       text+="  NCS_DOMAIN_PDB "+str(self._ncs_domain_pdb)+"\n"
 
@@ -783,11 +790,17 @@ class ncs_group:  # one group of NCS operators and center and where it applies
   def cc(self):
     return self._cc
 
+  def note(self):
+    return self._note
+
   def add_rmsd_list(self,rmsd_list):
     self._rmsd_list=rmsd_list
 
   def add_cc(self,cc):
     self._cc=cc
+
+  def add_note(self,note):
+    self._note=note
 
   def residues_in_common_list(self):
     return self._residues_in_common_list
@@ -956,6 +969,10 @@ class ncs_group:  # one group of NCS operators and center and where it applies
     # operators and verifying that the result is a member of the set
 
     # Allow checking self operators vs some other symmetry object if desired:
+
+    if len(self.rota_matrices_inv()) < 2:
+      return False
+
     if symmetry_to_match is None:
       symmetry_to_match=self
 
@@ -1052,6 +1069,8 @@ class ncs_group:  # one group of NCS operators and center and where it applies
 
     # For helical symmetry sequential application of operators moves up or
     #  down the list by an index depending on the indices of the operators.
+    if len(self.rota_matrices_inv()) < 2:
+      return False
     if self.is_point_group_symmetry(tol_r=tol_r,
             abs_tol_t=abs_tol_t,rel_tol_t=rel_tol_t):
       return False
@@ -1374,12 +1393,24 @@ class ncs_group:  # one group of NCS operators and center and where it applies
 
       new_centers.append(matrix.col(center)+matrix.col(coordinate_offset))
       #  T'=T - R x_i + x_1
-      delta = matrix.col(ncs_rota_matr * coordinate_offset)
+      delta = matrix.col(ncs_rota_matr * matrix.col(coordinate_offset))
       t_prime=matrix.col(trans_orth) - delta + first_coordinate_offset
       new_translations_orth.append(t_prime)
 
     self._centers=new_centers
     self._translations_orth=new_translations_orth
+
+  def add_identity_op(self):
+    if self.identity_op_id() is not None:
+       return # nothing to do
+
+    from scitbx import matrix
+
+    self._rota_matrices.append(matrix.sqr(
+      [1.,0.,0.]+[0.,1.,0.]+[0.,0.,1.]))
+    self._translations_orth.append(matrix.col([0.,0.,0.]))
+    self._centers.append(matrix.col([0.,0.,0.]))
+    self._n_ncs_oper+=1
 
 class ncs:
   def __init__(self,exclude_h=None,exclude_d=None):
@@ -1507,6 +1538,13 @@ class ncs:
     self._ncs_groups=self._ncs_groups[:1]
     return self
 
+  def select_first_ncs_operator(self):
+    # just keep the first ncs operator in the first group and remove others:
+    self.select_first_ncs_group()
+    if self._ncs_groups:
+      self._ncs_groups=[self._ncs_groups[0].deep_copy(ops_to_keep=[0])] #  keep first only
+    return self
+
   def set_unit_ncs(self):  # just make a single ncs operator
 
     self.init_ncs_group()
@@ -1565,6 +1603,8 @@ class ncs:
         self._center=self.get_3_values_after_key(line)
       elif key=='ncs_cc': # read  cc
         self._cc=self.get_1_value_after_key(line)
+      elif key=='note' or key=='note:': # read anything
+        self._note=" ".join(line.split()[1:])
       elif key=='chain':
         self._chain=self.get_1_char_after_key(line)
       elif key=='resseq':
@@ -1581,7 +1621,6 @@ class ncs:
         read_something=True
       else:
         pass
-
     self.save_existing_group_info()
     if read_something or len(self._ncs_groups) > 0:
       self._ncs_read=True
@@ -1655,6 +1694,7 @@ class ncs:
      self._rmsd_list=[]
      self._residues_in_common_list=[]
      self._cc=None
+     self._note=None
      self._ncs_domain_pdb=None
      self._chain_residue_id=[]
 
@@ -1711,27 +1751,36 @@ class ncs:
        rmsd_list=None,
        ncs_domain_pdb=None,
        cc=None,
-       source_of_ncs_info=None):
-     list_length=None
-     for lst in [trans_orth,ncs_rota_matr,center_orth]:
-       if not lst or len(lst)<1:
-         print "Length too short:",type(lst),lst,len(lst)
-         raise Sorry("The NCS operators in this file appear incomplete?")
-       if not list_length: list_length=len(lst)
-       if list_length!=len(lst):
-         print "Length of list incorrect:",type(lst),lst,len(lst),list_length
-         raise Sorry("The NCS operators in this file appear incomplete?")
-     ncs_group_object=ncs_group(
-       ncs_rota_matr=ncs_rota_matr,
-       center_orth=center_orth,
-       trans_orth=trans_orth,
-       chain_residue_id=remove_quotes_from_chain_id(chain_residue_id),
-       residues_in_common_list=residues_in_common_list,
-       rmsd_list=rmsd_list,
-       source_of_ncs_info=source_of_ncs_info,
-       ncs_domain_pdb=ncs_domain_pdb,
-       cc=cc,
-       exclude_h=self._exclude_h,exclude_d=self._exclude_d)
+       source_of_ncs_info=None,
+       ncs_group_object=None):
+
+     if not ncs_group_object:
+       list_length=None
+       if center_orth is None and trans_orth:
+         center_orth=len(trans_orth)*[(0,0,0)]
+       for lst in [trans_orth,ncs_rota_matr,center_orth]:
+         if not lst or len(lst)<1:
+           print "Length too short:",type(lst),lst,
+           if lst is not None:
+             print len(lst)
+           else:
+             print "0"
+           raise Sorry("The NCS operators in this file appear incomplete?")
+         if not list_length: list_length=len(lst)
+         if list_length!=len(lst):
+           print "Length of list incorrect:",type(lst),lst,len(lst),list_length
+           raise Sorry("The NCS operators in this file appear incomplete?")
+       ncs_group_object=ncs_group(
+         ncs_rota_matr=ncs_rota_matr,
+         center_orth=center_orth,
+         trans_orth=trans_orth,
+         chain_residue_id=remove_quotes_from_chain_id(chain_residue_id),
+         residues_in_common_list=residues_in_common_list,
+         rmsd_list=rmsd_list,
+         source_of_ncs_info=source_of_ncs_info,
+         ncs_domain_pdb=ncs_domain_pdb,
+         cc=cc,
+         exclude_h=self._exclude_h,exclude_d=self._exclude_d)
      self._ncs_groups.append(ncs_group_object)
 
   def save_ncs_group(self):
@@ -1760,7 +1809,7 @@ class ncs:
        rmsd_list=self._rmsd_list,
        residues_in_common_list=self._residues_in_common_list,
        chain_residue_id=self._chain_residue_id,
-       cc=self._cc)
+       cc=self._cc,note=self._note)
      self._ncs_groups.append(ncs_group_object)
      self.init_ncs_group()
 
@@ -1894,6 +1943,13 @@ class ncs:
    for ncs_group,cc in zip(self._ncs_groups,cc_list):
     ncs_group.add_cc(cc)
 
+  def overall_note(self):
+    overall_note=""
+    for ncs_group in self._ncs_groups:
+      if ncs_group._note is not None:
+        overall_note+=" "+ncs_group._note
+    return overall_note
+
   def overall_cc(self):
     cc_all=0.
     n=0
@@ -1993,6 +2049,10 @@ class ncs:
         return False
     return True
 
+  def add_identity_op(self):
+    for ncs_group in self._ncs_groups:
+      if ncs_group.identity_op_id() is None:
+        ncs_group.add_identity_op()
 
 test_ncs_info="""
 

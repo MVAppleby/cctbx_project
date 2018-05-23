@@ -3,7 +3,7 @@ from __future__ import division
 '''
 Author      : Lyubimov, A.Y.
 Created     : 04/14/2014
-Last Changed: 02/12/2018
+Last Changed: 04/04/2018
 Description : IOTA GUI Threads and PostEvents
 '''
 
@@ -104,7 +104,6 @@ class ProcThread(Thread):
     self.aborted = False
 
   def run(self):
-    # if self.init.params.mp_method == 'multiprocessing':
     try:
       img_objects = parallel_map(iterable=self.iterable,
                                  func = self.full_proc_wrapper,
@@ -113,38 +112,6 @@ class ProcThread(Thread):
       self.aborted = True
       print e
       return
-    # else:
-    #   # write iterable
-    #   img_objects = None
-    #   queue = self.init.params.mp_queue
-    #   iter_path = os.path.join(self.init.int_base, 'iter.cfg')
-    #   init_path = os.path.join(self.init.int_base, 'init.cfg')
-    #   nproc = self.init.params.n_processors
-    #   ep.dump(iter_path, self.iterable)
-    #   ep.dump(init_path, self.init)
-    #
-    #   if self.init.params.mp_method == 'lsf':
-    #     logfile = os.path.join(self.init.int_base, 'bsub.log')
-    #     command = 'bsub -o {} -q {} -n {} ' \
-    #               'iota.process {} --files {} --type {} --stopfile {}' \
-    #               ''.format(logfile, queue, nproc,
-    #                         init_path, iter_path, self.type, self.term_file)
-    #   elif self.init.params.mp_method == 'torq':
-    #     params = '{} --files {} --type {} --stopfile {}' \
-    #              ''.format(init_path, iter_path, self.type, self.term_file)
-    #     command = 'qsub -e /dev/null -o /dev/null -d {} iota.process -F "{}"' \
-    #               ''.format(self.init.params.output, params)
-    #   else:
-    #     command = None
-    #   if command is not None:
-    #     try:
-    #       print command
-    #       easy_run.fully_buffered(command, join_stdout_stderr=True).show_stdout()
-    #     except IOTATermination, e:
-    #       print e
-    #   else:
-    #     print 'IOTA ERROR: COMMAND NOT ISSUED!'
-    #     return
 
     # Send "all done" event to GUI
     try:
@@ -201,28 +168,24 @@ class ObjectFinderThread(Thread):
   def __init__(self,
                parent,
                object_folder,
-               fix_paths = False,
+               last_object=None,
                new_fin_base = None):
     Thread.__init__(self)
     self.parent = parent
     self.object_folder = object_folder
-    self.fix_paths = fix_paths
     self.new_fin_base = new_fin_base
+    self.last_object = last_object
 
   def run(self):
-    object_files = ginp.get_file_list(self.object_folder, ext_only='int')
+    if self.last_object is not None:
+      last = self.last_object.obj_file
+    else:
+      last = None
+    object_files = ginp.get_file_list(self.object_folder,
+                                      ext_only='int',
+                                      last=last)
     new_objects = [self.read_object_file(i) for i in object_files]
-    new_finished_objects = [i for i in new_objects if
-                            (i is not None and i.status == 'final')]
-
-    # # If recovering and need to fix paths of images (final only):
-    # if self.fix_paths:
-    #   for obj in new_finished_objects:
-    #     print 'Changing ', obj.final['final']
-    #     if obj.final['final'] is not None:
-    #       filename = os.path.basename(obj.final['final'])
-    #       obj.final['final'] = os.path.join(self.new_fin_base, filename)
-    #       print 'Generating filename ', obj.final['final']
+    new_finished_objects = [i for i in new_objects if i is not None]
 
     evt = ObjectFinderAllDone(tp_EVT_OBJDONE, -1, obj_list=new_finished_objects)
     wx.PostEvent(self.parent, evt)
@@ -231,15 +194,16 @@ class ObjectFinderThread(Thread):
     try:
       object = ep.load(filepath)
       return object
-    except EOFError:
-      pass
+    except EOFError, e:
+      print 'OBJECT_IMPORT_ERROR: ', e
+      return None
 
 class ImageViewerThread(Thread):
   ''' Worker thread that will move the image viewer launch away from the GUI
   and hopefully will prevent the image selection dialog freezing on MacOS'''
   def __init__(self,
                parent,
-               file_string,
+               file_string=None,
                viewer='dials.image_viewer',
                img_type=None):
     Thread.__init__(self)
@@ -294,7 +258,7 @@ class SpotFinderTerminated(wx.PyCommandEvent):
   def GetValue(self):
     return None
 
-class SpotFinderOneThread():
+class SpotFinderDIALSThread():
   def __init__(self, parent, processor, term_file):
     self.meta_parent = parent.parent
     self.processor = processor
@@ -306,7 +270,96 @@ class SpotFinderOneThread():
     else:
       datablock = DataBlockFactory.from_filenames([img])[0]
       observed = self.processor.find_spots(datablock=datablock)
-      return [idx, int(len(observed)), img]
+      return [idx, int(len(observed)), img, None, None]
+
+class SpotFinderMosflmThread():
+  def __init__(self, parent, term_file):
+    self.meta_parent = parent.parent
+    self.term_file = term_file
+
+  def run(self, idx, img):
+    if os.path.isfile(self.term_file):
+      raise IOTATermination('IOTA_TRACKER: Termination signal received!')
+    else:
+      # First, parse filepath to create Mosflm template
+      directory = os.path.dirname(img)
+      filepath = os.path.basename(img).split('.')
+      fname = filepath[0]
+      extension = filepath[1]
+      if '_' in fname:
+        suffix = fname.split('_')[-1]
+      elif '-' in fname:
+        suffix = fname.split('-')[-1]
+      elif '.' in fname:
+        suffix = fname.split('.')[-1]
+      img_number = int(''.join(n if n.isdigit() else '' for n in suffix))
+      prefix = fname.replace(suffix, '')
+      n_suffix = ''.join("#" if c.isdigit() else c for c in suffix)
+      template = '{}{}.{}'.format(prefix, n_suffix, extension)
+
+      # Create autoindex.com w/ Mosflm script
+      # Write to temporary file and change permissions to run
+      autoindex = ['#! /bin/tcsh -fe',
+                   'ipmosflm << eof-ipmosflm'.format(fname),
+                   'NEWMATRIX {0}.mat'.format(fname),
+                   'DIRECTORY {}'.format(directory),
+                   'TEMPLATE {}'.format(template),
+                   'AUTOINDEX DPS THRESH 0.1 IMAGE {} PHI 0 0.01'.format(
+                     img_number),
+                   'GO',
+                   'eof-ipmosflm'
+                   ]
+      autoindex_string = '\n'.join(autoindex)
+      autoindex_filename = 'autoindex_{}.com'.format(idx)
+
+      with open(autoindex_filename, 'w') as af:
+        af.write(autoindex_string)
+      os.chmod(autoindex_filename, 0755)
+
+      # Run Mosflm autoindexing
+      command = './{}'.format(autoindex_filename)
+      out = easy_run.fully_buffered(command, join_stdout_stderr=True)
+
+      # Scrub text output
+      final_spots = [l for l in out.stdout_lines if
+                     'spots written for image' in l]
+      final_cell_line = [l for l in out.stdout_lines if 'Final cell' in l]
+      final_sg_line = [l for l in out.stdout_lines if 'space group' in l]
+
+      if final_spots != []:
+        spots = final_spots[0].rsplit()[0]
+      else:
+        spots = 0
+      if final_cell_line != []:
+        cell = final_cell_line[0].replace('Final cell (after refinement) is',
+                                          '').rsplit()
+      else:
+        cell = None
+      if final_sg_line != []:
+        sg = final_sg_line[0].rsplit()[6]
+      else:
+        sg = None
+
+      # Temp file cleanup
+      try:
+        os.remove('{}.mat'.format(fname))
+      except Exception:
+        pass
+      try:
+        os.remove('{}.spt'.format(prefix[:-1]))
+      except Exception:
+        pass
+      try:
+        os.remove('SUMMARY')
+      except Exception:
+        pass
+      try:
+        os.remove(autoindex_filename)
+      except Exception:
+        pass
+
+      return [idx, spots, img, sg, cell]
+
 
 class SpotFinderThread(Thread):
   ''' Basic spotfinder (with defaults) that could be used to rapidly analyze
@@ -315,13 +368,18 @@ class SpotFinderThread(Thread):
                parent,
                data_list=None,
                term_file=None,
-               processor=None):
+               proc_params=None,
+               backend='dials'):
     Thread.__init__(self)
     self.parent = parent
     self.data_list = data_list
     self.term_file = term_file
-    self.processor = processor
     self.terminated = False
+    self.backend = backend
+
+    if self.backend == 'dials':
+      from iota.components.iota_dials import IOTADialsProcessor
+      self.processor = IOTADialsProcessor(params=proc_params)
 
   def run(self):
     total_procs = multiprocessing.cpu_count()
@@ -341,7 +399,7 @@ class SpotFinderThread(Thread):
         evt = SpotFinderTerminated(tp_EVT_SPFTERM, -1)
         wx.PostEvent(self.parent, evt)
       info = self.data_list
-      evt = SpotFinderOneDone(tp_EVT_SPFALLDONE, -1, info=info)
+      evt = SpotFinderAllDone(tp_EVT_SPFALLDONE, -1, info=info)
       wx.PostEvent(self.parent, evt)
       return
     except TypeError:
@@ -352,11 +410,17 @@ class SpotFinderThread(Thread):
     # blocking of the GUI and makes navigation faster
     try:
       if os.path.isfile(img):
-        spf_worker = SpotFinderOneThread(self, self.processor, self.term_file)
-        result = spf_worker.run(idx=int(self.data_list.index(img)), img=img)
+        if self.backend == 'dials':
+          spf_worker = SpotFinderDIALSThread(self, self.processor, self.term_file)
+          result = spf_worker.run(idx=int(self.data_list.index(img)), img=img)
+        elif self.backend == 'mosflm':
+          spf_worker = SpotFinderMosflmThread(self, self.term_file)
+          result = spf_worker.run(idx=int(self.data_list.index(img)), img=img)
+        else:
+          result = [int(self.data_list.index(img)), 0, img, None, None]
         return result
       else:
-        return [int(self.data_list.index(img)), 0, img]
+        return [int(self.data_list.index(img)), 0, img, None, None]
     except IOTATermination, e:
       raise e
 

@@ -30,7 +30,7 @@ def test_helix_interface():
     got_exception = True
   assert got_exception
   h = pdb_helix.from_pdb_record(h_string)
-  assert h.serial == 1
+  assert h.serial == '  1'
   assert h.helix_id == '1'
   assert h.start_resname == 'ALA'
   assert h.start_chain_id == 'A'
@@ -92,7 +92,7 @@ SHEET    2   A 2 LEU A  27  SER A  30 -1  O  ARG A  29   N  ARG A  13
   assert reg.prev_icode  == ' '
 
   assert st.sheet_id == '  A', st.sheet_id
-  assert st.strand_id == 2, st.strand_id
+  assert st.strand_id == '  2', st.strand_id
   assert st.start_resname == 'LEU'
   assert st.start_chain_id == 'A'
   assert st.start_resseq == '  27', st.start_resseq
@@ -666,10 +666,10 @@ loop_
   _struct_conf.pdbx_PDB_helix_class
   _struct_conf.details
   _struct_conf.pdbx_PDB_helix_length
-  HELX_P  1  AA1  SER  A   26  ?  LYS  A   30  ?  5  ?  5
-  HELX_P  2  AA2  LEU  A  196  ?  GLU  A  199  ?  5  ?  4
-  HELX_P  3  AA3  SER  B   26  ?  LYS  B   30  ?  5  ?  5
-  HELX_P  4  AA4  LEU  B  196  ?  GLU  B  199  ?  5  ?  4
+  HELX_P  '  1'  AA1  SER  A   26  ?  LYS  A   30  ?  5  ?  5
+  HELX_P  '  2'  AA2  LEU  A  196  ?  GLU  A  199  ?  5  ?  4
+  HELX_P  '  3'  AA3  SER  B   26  ?  LYS  B   30  ?  5  ?  5
+  HELX_P  '  4'  AA4  LEU  B  196  ?  GLU  B  199  ?  5  ?  4
 """
 
   pdb_str2 = """\
@@ -691,7 +691,7 @@ loop_
   _struct_conf.pdbx_PDB_helix_class
   _struct_conf.details
   _struct_conf.pdbx_PDB_helix_length
-  HELX_P  1  AA1  SER  A  26  ?  LYS  A  30  ?  5  ?  5\n"""
+  HELX_P  '  1'  AA1  SER  A  26  ?  LYS  A  30  ?  5  ?  5\n"""
 
   ann = annotation.from_records(pdb_str.split("\n"))
   cif_loops = ann.as_cif_loops()
@@ -700,7 +700,7 @@ loop_
   out = StringIO()
   helix_loop.show(out)
   v = out.getvalue()
-  # print "\"%s\"" % v
+  print "\"%s\"" % v
   assert not show_diff(out.getvalue(), answer)
 
   # hmmm... when there's only one chain, there is one less 'space'

@@ -3,13 +3,11 @@ from cctbx.array_family import flex
 import os
 import mmtbx.model
 import libtbx.load_env
-from libtbx import easy_pickle
 from mmtbx import monomer_library
-import mmtbx.monomer_library.server
 import mmtbx.monomer_library.pdb_interpretation
 from cStringIO import StringIO
 from libtbx.utils import format_cpu_times, null_out
-from libtbx.test_utils import approx_equal
+from libtbx.test_utils import approx_equal, show_diff
 import iotbx.pdb
 from mmtbx.refinement import geometry_minimization
 
@@ -876,21 +874,14 @@ ATOM    858  C6   DT D 108      -7.900  15.710  13.471  1.00 80.00           C
 END
 """
 
-def exercise_00(mon_lib_srv, ener_lib):
+def exercise_00():
   def get_ab(params):
-    processed_pdb_file = monomer_library.pdb_interpretation.process(
-      mon_lib_srv    = mon_lib_srv,
-      ener_lib       = ener_lib,
-      params         = params,
-      file_name      = None,
-      raw_records    = pdb_str_00,
-      force_symmetry = True)
-    xray_structure = processed_pdb_file.xray_structure()
+    pdb_inp = iotbx.pdb.input(lines=pdb_str_00.split('\n'), source_info=None)
+    m = mmtbx.model.manager(model_input=pdb_inp, pdb_interpretation_params=params)
+    xray_structure = m.get_xray_structure()
     assert xray_structure is not None
     s = flex.bool(xray_structure.scatterers().size(),flex.size_t(range(40,504)))
-    geometry = processed_pdb_file.geometry_restraints_manager(
-      show_energies      = False,
-      plain_pairs_radius = 5.0)
+    geometry = m.get_restraints_manager().geometry
     geometry = geometry.select(s)
     es = geometry.energies_sites(
       sites_cart = xray_structure.sites_cart().select(s))
@@ -900,17 +891,17 @@ def exercise_00(mon_lib_srv, ener_lib):
   # default
   a1,b1 = get_ab(params=None)
   # using custom bonds
-  params = monomer_library.pdb_interpretation.master_params.extract()
-  params.automatic_linking.link_all=True
-  params.secondary_structure.enabled=True
-  params.secondary_structure.nucleic_acid.base_pair[0].restrain_hbonds=True
-  params.secondary_structure.nucleic_acid.base_pair[0].restrain_hb_angles=True
+  params = mmtbx.model.manager.get_default_pdb_interpretation_params()
+  params.pdb_interpretation.automatic_linking.link_all=True
+  params.pdb_interpretation.secondary_structure.enabled=True
+  params.pdb_interpretation.secondary_structure.nucleic_acid.base_pair[0].restrain_hbonds=True
+  params.pdb_interpretation.secondary_structure.nucleic_acid.base_pair[0].restrain_hb_angles=True
   a2,b2 = get_ab(params=params)
   #
   assert approx_equal(a1,a2)
   assert approx_equal(b1,b2)
 
-def exercise(mon_lib_srv, ener_lib):
+def exercise():
   pdb_file = libtbx.env.find_in_repositories(
                    relative_path="phenix_regression/pdb/enk.pdb", test=os.path.isfile)
   mol = mmtbx.model.manager(
@@ -965,10 +956,10 @@ def exercise(mon_lib_srv, ener_lib):
   iso.refine_ap_and_dp = False
   iso.use_u_local_only = False
 #####
-
-  mol.show_adp_statistics()
+  import sys
+  mol.show_adp_statistics(out=sys.stdout)
   print
-  mol.show_adp_statistics()
+  mol.show_adp_statistics(out=sys.stdout)
 
   rm = mol.restraints_manager
 
@@ -982,7 +973,7 @@ def exercise(mon_lib_srv, ener_lib):
   f1.close()
   f2.close()
 
-def exercise_2(mon_lib_srv, ener_lib):
+def exercise_2():
   pdb_file = libtbx.env.find_in_repositories(
                    relative_path="phenix_regression/pdb/adp_out_stat.pdb", test=os.path.isfile)
   params = monomer_library.pdb_interpretation.master_params.extract()
@@ -993,54 +984,8 @@ def exercise_2(mon_lib_srv, ener_lib):
       pdb_interpretation_params = params,
       build_grm = True)
   mol.setup_scattering_dictionaries(scattering_table = "wk1995")
-
   out = StringIO()
   adp_stat = mol.show_adp_statistics(out = out)
-  expected_result = \
-  """|-ADP statistics-------------------------------------------------------|
-| Atom    | Number of   | Isotropic or equivalent| Anisotropy lmin/max |
-| type    |iso    aniso | min     max     mean   | min   max    mean   |
-| - - - - |- - - - - - -| - - - - - - - - - - - -| - - - - - - - - - - |
-| all     : 14     7      1.31    18.27   13.11    0.02  0.73   0.20   |
-| all(noH): 9      5      1.45    18.27   15.14    0.03  0.73   0.18   |
-| Sol.    : 1      1      1.45    2.00    1.73     0.73  0.73   0.73   |
-| Mac.    : 8      4      15.00   18.27   17.38    0.03  0.05   0.04   |
-| Hyd.    : 5      2      1.31    17.15   9.04     0.02  0.50   0.26   |
-| - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -  |
-|    Distribution of isotropic (or equivalent) ADP for non-H atoms:    |
-| Bin#      value range     #atoms | Bin#      value range     #atoms  |
-|   0:     1.450 -   3.132:    2   |   5:     9.860 -  11.542:    0    |
-|   1:     3.132 -   4.814:    0   |   6:    11.542 -  13.224:    0    |
-|   2:     4.814 -   6.496:    0   |   7:    13.224 -  14.906:    0    |
-|   3:     6.496 -   8.178:    0   |   8:    14.906 -  16.588:    1    |
-|   4:     8.178 -   9.860:    0   |   9:    16.588 -  18.270:   11    |
-|                            =>continue=>                              |
-| - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -  |
-|                     Distribution of anisotropy:                      |
-| Bin#      value range     #atoms | Bin#      value range     #atoms  |
-|   0:     0.028 -   0.098:    4   |   5:     0.377 -   0.447:    0    |
-|   1:     0.098 -   0.168:    0   |   6:     0.447 -   0.517:    0    |
-|   2:     0.168 -   0.238:    0   |   7:     0.517 -   0.587:    0    |
-|   3:     0.238 -   0.307:    0   |   8:     0.587 -   0.657:    0    |
-|   4:     0.307 -   0.377:    0   |   9:     0.657 -   0.726:    1    |
-|                            =>continue=>                              |
-|----------------------------------------------------------------------|
-"""
-  assert out.getvalue() == expected_result
-  # XXX phenix GUI support (see wxtbx.adp_statistics)
-  stats = mol.adp_statistics()
-  tables = stats.format_tables()
-  stats_pkl = easy_pickle.dumps(stats)
-  stats2 = easy_pickle.loads(stats_pkl)
-  tables2 = stats.format_tables()
-  assert (tables2 == tables)
-  t1,t2,t3 = tables2
-  assert (len(t1) == 5) and (len(t2) == 10) and (len(t3) == 10)
-  assert (t1[0][1:3] == ["14","7"]) and (t1[-1][1:3] == ["5","2"])
-  assert (t2[1][1] == "3.132 - 4.814")
-  p1, p2 = stats.format_plots()
-  y1, yrange1 = p1
-  assert (len(y1) == 10)
 
 def exercise_3():
   pdb_file = libtbx.env.find_in_repositories(
@@ -1240,19 +1185,11 @@ ANISOU 2732  O  BHOH A 380     3169   2234   2532   1183    675   -168       O
   result = model.extract_water_residue_groups()
   assert len(result)==1
 
-def exercise_6(mon_lib_srv, ener_lib):
-  processed_pdb_file = monomer_library.pdb_interpretation.process(
-    mon_lib_srv    = mon_lib_srv,
-    ener_lib       = ener_lib,
-    file_name      = None,
-    raw_records    = pdb_str_00,
-    force_symmetry = True)
-  geometry = processed_pdb_file.geometry_restraints_manager(
-    show_energies      = False,
-    plain_pairs_radius = 5.0)
-  ms = mmtbx.model.statistics.geometry(
-    pdb_hierarchy = processed_pdb_file.all_chain_proxies.pdb_hierarchy,
-    geometry_restraints_manager = geometry)
+def exercise_6():
+  pdb_inp = iotbx.pdb.input(lines=pdb_str_00.split('\n'), source_info=None)
+  m = mmtbx.model.manager(model_input=pdb_inp)
+  m.get_restraints_manager()
+  ms = m.geometry_statistics()
   ms.show()
   #
   # IF you are about to change this - STOP! Likely you're doing something wrong!
@@ -1261,18 +1198,54 @@ def exercise_6(mon_lib_srv, ener_lib):
   r = inspect.getargspec(mmtbx.model.statistics.geometry.__init__)
   assert r.args == ['self', 'pdb_hierarchy', 'use_hydrogens', 'use_nuclear', 'geometry_restraints_manager']
 
+def exercise_from_hierarchy():
+  def check_consistency(m1, m2):
+    assert approx_equal(m1.get_sites_cart(), m2.get_sites_cart())
+    assert approx_equal(m1.get_xray_structure().sites_cart(),
+                        m2.get_xray_structure().sites_cart())
+    assert m1.crystal_symmetry().is_similar_symmetry(m2.crystal_symmetry())
+    assert not show_diff(m1.model_as_pdb(), m2.model_as_pdb())
+    assert not show_diff(m1.model_as_mmcif(), m2.model_as_mmcif())
+    grm1 = m1.get_restraints_manager()
+    grm2 = m2.get_restraints_manager()
+    geo1 = m1.restraints_as_geo()
+    geo2 = m2.restraints_as_geo()
+    # mixed order in nonbonded. It is fine since everything else below
+    # matches perfectly
+    # assert not show_diff(geo1, geo2)
+    es1 = grm1.energies_sites(m1.get_sites_cart(), compute_gradients=True)
+    es2 = grm2.energies_sites(m2.get_sites_cart(), compute_gradients=True)
+    print es1.residual_sum
+    print es1.target
+    assert approx_equal(es1.residual_sum, es2.residual_sum)
+    assert approx_equal(es1.target, es2.target)
+    assert approx_equal(es1.gradients, es2.gradients)
+
+  pdb_inp1 = iotbx.pdb.input(lines=pdb_str_00.split('\n'), source_info=None)
+  pdb_inp2 = iotbx.pdb.input(lines=pdb_str_00.split('\n'), source_info=None)
+  m1 = mmtbx.model.manager(model_input = pdb_inp1)
+  m2 = mmtbx.model.manager(
+      model_input = None,
+      crystal_symmetry = pdb_inp2.crystal_symmetry(),
+      pdb_hierarchy=pdb_inp2.construct_hierarchy())
+  check_consistency(m1, m2)
+  sel = m1.selection("chain A")
+  m11 = m1.select(sel)
+  m22 = m2.select(sel)
+  check_consistency(m11, m22)
+
+
 def run():
-  mon_lib_srv = monomer_library.server.server()
-  ener_lib = monomer_library.server.ener_lib()
-  exercise_00(mon_lib_srv, ener_lib)
-  exercise(mon_lib_srv, ener_lib)
-  exercise_2(mon_lib_srv, ener_lib)
+  exercise_00()
+  exercise()
+  exercise_2()
   exercise_3()
   exercise_4()
   exercise_convert_atom()
   exercise_h_counts()
   exercise_5()
-  exercise_6(mon_lib_srv, ener_lib)
+  exercise_6()
+  exercise_from_hierarchy()
   print format_cpu_times()
 
 if (__name__ == "__main__"):

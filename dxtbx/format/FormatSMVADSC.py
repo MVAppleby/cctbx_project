@@ -8,7 +8,7 @@
 # An implementation of the SMV image reader for ADSC images. Inherits from
 # FormatSMV.
 
-from __future__ import absolute_import, division
+from __future__ import absolute_import, division, print_function
 
 import time
 
@@ -31,7 +31,7 @@ class FormatSMVADSC(FormatSMV):
     if header.get('BEAMLINE') == 'fake': return False
 
     # do not understand Timepix_SU images
-    if header.get('BEAMLINE') == 'TimePix_SU': return False
+    if header.get('BEAMLINE', '').upper() == 'TIMEPIX_SU': return False
 
     # this used to include TIME
     wanted_header_items = ['BEAM_CENTER_X', 'BEAM_CENTER_Y',
@@ -247,4 +247,4 @@ if __name__ == '__main__':
   import sys
 
   for arg in sys.argv[1:]:
-    print FormatSMVADSC.understand(arg)
+    print(FormatSMVADSC.understand(arg))

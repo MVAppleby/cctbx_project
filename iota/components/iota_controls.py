@@ -3,7 +3,7 @@ from __future__ import division
 '''
 Author      : Lyubimov, A.Y.
 Created     : 07/08/2016
-Last Changed: 10/31/2017
+Last Changed: 04/19/2018
 Description : IOTA GUI controls
 '''
 
@@ -337,10 +337,12 @@ class DialogButtonsCtrl(CtrlBase):
 
     if choices is not None:
       choice_sizer = wx.BoxSizer(wx.HORIZONTAL)
-      self.choice_txt = wx.StaticText(self, label=choice_label, size=wx.DefaultSize)
+      self.choice_txt = wx.StaticText(self, label=choice_label,
+                                      size=wx.DefaultSize)
       self.choice = wx.Choice(self, size=choice_size, choices=choices)
       self.choice.SetSelection(0)
-      choice_sizer.Add(self.choice_txt, flag=wx.LEFT, border=5)
+      choice_sizer.Add(self.choice_txt, flag=wx.LEFT | wx.ALIGN_CENTER_VERTICAL,
+                       border=5)
       choice_sizer.Add(self.choice)
       main_sizer.Add(choice_sizer, flag=wx.ALL, border=10)
 
@@ -532,12 +534,12 @@ class SpinCtrl(CtrlBase):
   ''' Generic panel will place a spin control w/ label '''
   def __init__(self, parent,
                label='',
-               label_size=(200, -1),
+               label_size=wx.DefaultSize,
                label_style='normal',
                checkbox=False,
                checkbox_state=False,
                checkbox_label='',
-               ctrl_size=(60, -1),
+               ctrl_size=wx.DefaultSize,
                ctrl_value='3',
                ctrl_max=999999,
                ctrl_min=0,
@@ -582,7 +584,8 @@ class SpinCtrl(CtrlBase):
     self.toggle_boxes(flag_on=self.toggle.GetValue())
     e.Skip()
 
-  def toggle_boxes(self, flag_on):
+  def toggle_boxes(self, flag_on=True):
+    self.toggle.SetValue(flag_on)
     if flag_on:
       self.ctr.Enable()
       self.ctr.SetValue(int(self.value))
@@ -603,11 +606,14 @@ class OptionCtrl(CtrlBase):
                label_style='normal',
                sub_labels=[],
                sub_label_justify=wx.ALIGN_LEFT,
+               sub_label_vertical=wx.ALIGN_CENTER_VERTICAL,
                grid=None,
                checkbox=False,
                checkbox_label='',
                checkbox_state=False,
-               ctrl_size=(300, -1)):
+               ctrl_size=(300, -1),
+               expand_rows=None,
+               expand_cols=None):
 
     CtrlBase.__init__(self, parent=parent, label_style=label_style)
 
@@ -631,7 +637,8 @@ class OptionCtrl(CtrlBase):
 
       if len(self.items) > 1:
         opt_label = wx.StaticText(self, id=wx.ID_ANY, label=sub_label)
-        self.ctrl_box.Add(opt_label, flag=wx.ALIGN_CENTER_VERTICAL | sub_label_justify)
+        self.ctrl_box.Add(opt_label, flag=sub_label_vertical |
+                                          sub_label_justify)
 
       if key == '':
         item = wx.StaticText(self, label='')
@@ -640,7 +647,8 @@ class OptionCtrl(CtrlBase):
                            style=wx.TE_PROCESS_ENTER)
         self.__setattr__(key, item)
         item.SetValue(str(value))
-      self.ctrl_box.Add(item, flag=wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_RIGHT | wx.EXPAND)
+      self.ctrl_box.Add(item, proportion=1,
+                        flag=wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_RIGHT | wx.EXPAND)
 
 
     cols = 1
@@ -658,15 +666,28 @@ class OptionCtrl(CtrlBase):
     opt_box = wx.FlexGridSizer(1, cols, 5, 10)
 
     if label != '':
-      opt_box.Add(self.txt, flag=wx.ALIGN_CENTER_VERTICAL)
+      opt_box.Add(self.txt, flag=sub_label_vertical)
     if checkbox:
-      opt_box.Add(self.toggle, flag=wx.ALIGN_CENTER_VERTICAL)
+      opt_box.Add(self.toggle, flag=sub_label_vertical)
       self.toggle_boxes(flag_on=False)
 
       self.Bind(wx.EVT_CHECKBOX, self.onToggle, self.toggle)
 
-    opt_box.Add(self.ctrl_box)
+    if expand_rows is not None:
+      assert isinstance(expand_rows, (list, tuple))
+      for row in expand_rows:
+        self.ctrl_box.AddGrowableRow(row)
+      opt_box.AddGrowableRow(0)
+
+    if expand_cols is not None:
+      assert isinstance(expand_cols, (list, tuple))
+      for col in expand_cols:
+        self.ctrl_box.AddGrowableCol(col)
+      opt_box.AddGrowableCol(cols-1)
+
+    opt_box.Add(self.ctrl_box, flag=wx.EXPAND)
     self.SetSizer(opt_box)
+    self.Layout()
 
   def onToggle(self, e):
     self.toggle_boxes(flag_on=self.toggle.GetValue())
@@ -674,6 +695,7 @@ class OptionCtrl(CtrlBase):
 
   def toggle_boxes(self, flag_on=True):
     self.toggle.SetValue(flag_on)
+
     if self.items is not None:
       if flag_on:
         for item in self.items:
@@ -789,7 +811,6 @@ class KnobCtrl(CtrlBase):
 
   def onFS_Value_Change(self, e):
     self.knob_ctr.SetValue(self.value_ctr.ctr.GetValue())
-
 
 
 class CustomListCtrl(CtrlBase):

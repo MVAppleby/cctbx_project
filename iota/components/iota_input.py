@@ -3,7 +3,7 @@ from __future__ import division
 '''
 Author      : Lyubimov, A.Y.
 Created     : 10/10/2014
-Last Changed: 02/12/2018
+Last Changed: 04/05/2018
 Description : IOTA I/O module. Reads PHIL input, also creates reasonable IOTA
               and PHIL defaults if selected.
 '''
@@ -203,7 +203,7 @@ dials
   target_unit_cell = None
     .type = unit_cell
     .help = Target unit cell parameters (if known)
-  use_fft3d = False
+  use_fft3d = True
     .type = bool
     .help = Set to True to use FFT3D in indexing
   significance_filter
@@ -219,7 +219,7 @@ dials
   determine_sg_and_reindex = True
     .type = bool
     .help = Will determine sg and reindex if no target space group supplied
-  auto_threshold = True
+  auto_threshold = False
     .type = bool
     .help = Set to True to estimate global threshold for each image
   filter
@@ -254,6 +254,15 @@ analysis
   cluster_threshold = 5000
     .type = int
     .help = threshold value for unit cell clustering
+  cluster_n_images = None
+    .type = int
+    .help = How many images to cluster? (Useful for huge datasets.)
+  cluster_limit = 5
+    .type = int
+    .help = "Major clusters" are defined as clusters with over n members
+  cluster_write_files = True
+    .type = bool
+    .help = Set to True to write lists of images belonging to major clusters
   viz = None *no_visualization integration cv_vectors
     .type = choice
     .help = Set to "integration" to visualize spotfinding and integration results.
@@ -268,10 +277,10 @@ analysis
 advanced
   .help = "Advanced, debugging and experimental options."
 {
-  integrate_with = *cctbx dials
+  integrate_with = cctbx *dials
     .type = choice
     .help = Choose image processing software package
-  estimate_gain = True
+  estimate_gain = False
     .type = bool
     .help = Estimates detector gain (helps improve spotfinding in DIALS)
   flip_beamXY = True
@@ -301,12 +310,20 @@ advanced
   temporary_output_folder = None
     .type = path
     .help = If None, temp output goes to <output>/integration/###/tmp/
+  image_range
+    .help = Use a range of images, e.g. 5 - 1000
+  {
+    flag_on = False
+      .type = bool
+    range = None
+      .type = str
+      .help = Can input multiple ranges, e.g. "5, 60-100, 200-1500"
+  }
   random_sample
     .help = Use a randomized subset of images (or -r <number> option)
   {
     flag_on = False
       .type = bool
-      .help = Set to run grid search on a random set of images.
     number = 0
       .type = int
       .help = Number of random samples. Set to zero to select 10% of input.
@@ -424,7 +441,8 @@ def process_input(args,
   final_phil = master_phil.format(python_object=params)
 
   temp_phil = [final_phil]
-  diff_phil = master_phil.fetch_diff(sources=temp_phil)
+  #diff_phil = master_phil.fetch_diff(sources=temp_phil)
+  diff_phil = master_phil.fetch(sources=temp_phil)
 
   with Capturing() as output:
     diff_phil.show()

@@ -56,8 +56,10 @@ class run(object):
     self.special_position_settings = crystal.special_position_settings(
       crystal_symmetry = self.crystal_symmetry)
     self.special_position_indices = self.get_special_position_indices()
-    self.selection_water_as_set = set(self.pdb_hierarchy.\
-      atom_selection_cache().selection(string = "water").iselection())
+    # Even better would be to pass it here. Ideally just use model
+    self.atom_selection_cache = self.pdb_hierarchy.atom_selection_cache()
+    self.selection_water_as_set = set(self.atom_selection_cache.\
+        selection(string = "water").iselection())
     if(self.massage_map):
       self.target_map = self.prepare_target_map()
     else:
@@ -112,9 +114,13 @@ class run(object):
     return False
 
   def prepare_target_map(self): # XXX This may need to go external
+    if self.map_data is None:
+      # This just makes dummy map to allow functionality working without it.
+      self.map_data = flex.double(flex.grid(50,50,50), 0)
+
     map_data = self.map_data.deep_copy()
     # truncate map
-    selection = self.pdb_hierarchy.atom_selection_cache().selection(
+    selection = self.atom_selection_cache.selection(
       string = "element C or element O or element N")
     mean_atom = flex.double()
     for i_a, a in enumerate(list(self.pdb_hierarchy.atoms())):

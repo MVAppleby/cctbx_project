@@ -1,8 +1,18 @@
 #!/usr/bin/env python
 # -*- mode: python; coding: utf-8; indent-tabs-mode: nil; python-indent: 2 -*-
-from __future__ import division
-import os, os.path, posixpath, ntpath
+
+# To download this file:
+# wget https://raw.githubusercontent.com/cctbx/cctbx_project/master/libtbx/auto_build/bootstrap.py
+# or
+# curl https://raw.githubusercontent.com/cctbx/cctbx_project/master/libtbx/auto_build/bootstrap.py > bootstrap.py
+
+from __future__ import absolute_import, division
+
+import ntpath
 import optparse
+import os
+import os.path
+import posixpath
 import re
 import shutil
 import socket as pysocket
@@ -19,8 +29,8 @@ import zipfile
 
 windows_remove_list = []
 
-rosetta_version_tar_bundle="rosetta_src_3.7_bundle"
-rosetta_version_directory='rosetta_src_2016.32.58837_bundle'
+rosetta_version_tar_bundle='rosetta_src_2018.19.60220_bundle'
+rosetta_version_directory=rosetta_version_tar_bundle
 # LICENSE REQUIRED
 afitt_version="AFITT-2.4.0.4-redhat-RHEL7-x64" #binary specific to cci-vm-1
 amber_version='ambertools-18' # same as circle download file
@@ -31,14 +41,6 @@ envs = {
   "OE_EXE"              : ["modules", "openeye", "bin"],
   "OE_LICENSE"          : ["oe_license.txt"], # needed for license
 }
-
-# To download this file:
-# wget https://raw.githubusercontent.com/cctbx/cctbx_project/master/libtbx/auto_build/bootstrap.py
-# or
-# curl https://raw.githubusercontent.com/cctbx/cctbx_project/master/libtbx/auto_build/bootstrap.py > bootstrap.py
-
-# To get the version before the switch to git:
-# svn export -r 25697 svn://svn.code.sf.net/p/cctbx/code/trunk/libtbx/auto_build/bootstrap.py
 
 # Utility function to be executed on slave machine or called directly by standalone bootstrap script
 def tar_extract(workdir, archive, modulename=None):
@@ -297,8 +299,8 @@ class Toolbox(object):
       # if url fails to open, try using curl
       # temporary fix for old OpenSSL in system Python on macOS
       # https://github.com/cctbx/cctbx_project/issues/33
-      subprocess.call(['/usr/bin/curl', '-Lo', file, url], stdout=sys.stdout,
-                      stderr=sys.stderr)
+      command = ['/usr/bin/curl', '--http1.0', '-Lo', file, '--retry', '5', url]
+      subprocess.call(command, shell=False)
       socket = None     # prevent later socket code from being run
       received = 1      # satisfy (filesize > 0) checks later on
 
@@ -528,6 +530,12 @@ class Toolbox(object):
           except OSError:
             returncode = 1
         Toolbox.set_git_repository_config_to_rebase(os.path.join(destination, '.git', 'config'))
+        if returncode:
+          return returncode # no point trying to continue on error
+        # Show the hash for the checked out commit for debugging purposes, ignore any failures.
+        ShellCommand(
+          command=[ 'git', 'rev-parse', 'HEAD' ], workdir=destination, silent=False
+        ).run()
         return returncode
       filename = "%s-%s" % (module,
                             urlparse.urlparse(source_candidate)[2].split('/')[-1])
@@ -1004,6 +1012,7 @@ class Builder(object):
       enable_shared=False,
       mpi_build=False,
       python3=False,
+      wxpython4=False,
     ):
     if nproc is None:
       self.nproc=1
@@ -1027,6 +1036,7 @@ class Builder(object):
     self.python3 = python3
     if python3:
       python_executable = 'python3'
+    self.wxpython4 = wxpython4
     if self.platform and ('windows' in self.platform or self.platform == 'win32'):
       python_executable = python_executable + '.exe'
     if self.platform and 'windows' in self.platform:
@@ -1392,8 +1402,8 @@ class Builder(object):
     if reference_repository_path is None:
       if os.name == 'posix' and 'diamond.ac.uk' in pysocket.gethostname():
         reference_repository_path = '/dls/science/groups/scisoft/DIALS/repositories/git-reference'
-    if reference_repository_path is not None:
-      reference_repository_path = os.path.join(reference_repository_path, module)
+    if reference_repository_path:
+      reference_repository_path = os.path.expanduser(os.path.join(reference_repository_path, module))
     class _indirection(object):
       def run(self):
         Toolbox().git(module, parameters, destination=destination,
@@ -1483,6 +1493,8 @@ class Builder(object):
       extra_opts.append('--skip-base=%s' % self.skip_base)
     if self.python3:
       extra_opts.append('--python3')
+    if self.wxpython4:
+      extra_opts.append('--wxpython4')
     if not self.force_base_build:
       if "--skip-if-exists" not in extra_opts:
         extra_opts.append("--skip-if-exists")
@@ -1706,7 +1718,6 @@ class PhaserBuilder(CCIBuilder):
     'ccp4io_adaptbx',
     'annlib_adaptbx',
     'tntbx',
-    'clipper',
     'phaser_regression',
     'phaser',
   ]
@@ -1723,18 +1734,29 @@ class PhaserBuilder(CCIBuilder):
   ]
 
   def add_tests(self):
-    self.add_test_command('libtbx.import_all_python', workdir=['modules', 'cctbx_project'])
-    self.add_test_command('cctbx_regression.test_nightly')
+    self.add_test_command('phaser_regression.regression',
+                          args=['all',
+                                '-o',
+                                'terse_failed',
+                                '-n',
+                                '%s' %self.nproc,
+                                ],
+    )
 
   def add_base(self, extra_opts=[]):
     # skip unnecessary base packages when building phaser only
     if self.skip_base is None or len(self.skip_base) == 0:
-      self.skip_base = "hdf5,lz4_plugin,wxpython,docutils,pyopengl,pillow,tiff," + \
-        "cairo,fonts,render,fontconfig,pixman,png,sphinx,freetype,gtk,matplotlib,"
+      self.skip_base = "hdf5,lz4_plugin,py2app,wxpython,docutils,pyopengl,pillow,tiff," + \
+        "cairo,fonts,render,fontconfig,pixman,png,sphinx,freetype,gtk,matplotlib," + \
+        "cython,h5py,gettext,numpy,pythonextra,pytest,junitxml,libsvm,pyrtf,six,send2trash," + \
+         "jinja2,orderedset,procrunner,tabulate,scipy,scikit_learn,biopython,expat,glib"
     else:
-      self.skip_base = ','.join(self.skip_base.split(',') + ['hdf5','lz4_plugin',
-         'wxpython','docutils','pyopengl','pillow','tiff','cairo','fonts', 'matplotlib',
-         'fontconfig','render','pixman','png','sphinx','freetype','gtk'])
+      self.skip_base = ','.join(self.skip_base.split(',') + ['hdf5','lz4_plugin','py2app',
+         'wxpython','docutils','pyopengl','pillow','tiff','cairo','fonts','pyrtf','six','send2trash',
+         'fontconfig','render','pixman','png','sphinx','freetype','gtk', 'matplotlib',
+         'cython', 'h5py', 'gettext', 'numpy', 'pythonextra', 'pytest', 'junitxml','libsvm',
+         'jinja2', 'orderedset', 'procrunner', 'tabulate', 'scipy', 'scikit_learn', 'biopython', 'expat', 'glib'
+         ])
     super(PhaserBuilder, self).add_base(
       extra_opts=['--cctbx',
                  ] + extra_opts)
@@ -1821,8 +1843,7 @@ class DIALSBuilder(CCIBuilder):
 
   def add_base(self, extra_opts=[]):
     super(DIALSBuilder, self).add_base(
-      extra_opts=['--dials',
-                  #'--wxpython3'
+      extra_opts=['--dials', '--xia2',
                  ] + extra_opts)
 
   def add_dispatchers(self):
@@ -1865,7 +1886,7 @@ class XFELBuilder(CCIBuilder):
 
   def add_base(self, extra_opts=[]):
     super(XFELBuilder, self).add_base(
-      extra_opts=['--labelit'] + extra_opts)
+      extra_opts=['--labelit', '--dials'] + extra_opts)
 
   def add_tests(self):
     self.add_test_command('cctbx_regression.test_nightly')
@@ -1930,7 +1951,8 @@ class PhenixBuilder(CCIBuilder):
     super(PhenixBuilder, self).add_base(
       extra_opts=['--phenix',
                   '--labelit',
-                  '--dials'
+                  '--dials',
+                  '--xia2',
                  ] + extra_opts)
 
   def add_install(self):
@@ -2064,7 +2086,7 @@ class PhenixExternalRegression(PhenixBuilder):
     self.write_environment(env)
     # not universal but works because only slave running this is same as master
     amber_c_comp = "clang"
-    if sys.platform == "linux2":
+    if sys.platform.startswith("linux"):
       amber_c_comp = "gnu"
     for name, command, workdir in [
         ['AFITT - untar',
@@ -2381,6 +2403,11 @@ def run(root=None):
                     help="Install a Python3 interpreter. This is unsupported and purely for development purposes.",
                     action="store_true",
                     default=False)
+  parser.add_option("--wxpython4",
+                    dest="wxpython4",
+                    help="Install wxpython4 instead of wxpython3. This is unsupported and purely for development purposes.",
+                    action="store_true",
+                    default=False)
   options, args = parser.parse_args()
   # process external
   options.specific_external_builder=None
@@ -2410,7 +2437,7 @@ def run(root=None):
   if options.builder not in builders:
     raise ValueError("Unknown builder: %s"%options.builder)
 
-  auth = { 'git_ssh': options.git_ssh }
+  auth = { 'git_ssh': options.git_ssh, 'git_reference': options.git_reference }
   if options.cciuser:
     auth['cciuser'] = options.cciuser
   if options.sfuser:
@@ -2442,6 +2469,7 @@ def run(root=None):
     enable_shared=options.enable_shared,
     mpi_build=options.mpi_build,
     python3=options.python3,
+    wxpython4=options.wxpython4,
   ).run()
   print "\nBootstrap success: %s" % ", ".join(actions)
 

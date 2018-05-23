@@ -1,5 +1,6 @@
 from __future__ import absolute_import, division
-from dxtbx.format.FormatXTC import FormatXTC
+from dxtbx.format.FormatXTC import FormatXTC,locator_str
+from libtbx.phil import parse
 try:
   from xfel.cxi.cspad_ana import cspad_tbx
   from xfel.cftbx.detector import cspad_cbf_tbx
@@ -7,32 +8,36 @@ except ImportError:
   # xfel not configured
   pass
 
+cspad_locator_str = """
+  cspad {
+    apply_gain_mask = True
+      .type = bool
+      .help = flag to indicate if gain should be applied to cspad data
+    dark_correction = True
+      .type = bool
+      .help = flag to decide if dark correction should be done
+    }
+"""
+
+cspad_locator_scope = parse(cspad_locator_str+locator_str, process_includes=True)
+
 class FormatXTCCspad(FormatXTC):
 
   def __init__(self, image_file, **kwargs):
     assert(self.understand(image_file))
+    FormatXTC.__init__(self, image_file, locator_scope = cspad_locator_scope, **kwargs)
     self._ds = self._get_datasource(image_file)
-    self.events_list = []
+    self._env = self._ds.env()
     self.populate_events()
-    FormatXTC.__init__(self, image_file, **kwargs)
-
-  def _get_event(self,index):
-    return self.events_list[index]
-
-  def _start(self):
-    self.n_images = len(self.events_list)
-
-  def populate_events(self):
-    for nevent,evt in enumerate(self._ds.events()):
-      self.events_list.append(evt)
+    self.n_images = len(self.times)
 
   @staticmethod
   def understand(image_file):
     import psana
     try:
       if FormatXTC._src is None:
-        FormatXTC._src = names[int(raw_input("Please Enter name of detector numbered 1 through %d : "%(len(names))))-1][0]
-      if 'cspad' in FormatXTC._src.lower():
+        FormatXTC._src = [names[int(raw_input("Please Enter name of detector numbered 1 through %d : "%(len(names))))-1][0]]
+      if any(['cspad' in src.lower() for src in FormatXTC._src]):
         return True
       return False
     except Exception:
@@ -42,13 +47,14 @@ class FormatXTCCspad(FormatXTC):
     import psana
     from scitbx.array_family import flex
     import numpy as np
-    det = psana.Detector(self._src, self._env)
-    d = self.get_detector()
+    assert len(self._src) == 1
+    det = psana.Detector(self._src[0], self._env)
+    d = FormatXTCCspad.get_detector(self, index)
     data = cspad_cbf_tbx.get_psana_corrected_data(det, self._get_event(index),
                                                   use_default=False,
-                                                  dark=True,
+                                                  dark=self.params.cspad.dark_correction,
                                                   common_mode=None,
-                                                  apply_gain_mask=False,
+                                                  apply_gain_mask=self.params.cspad.apply_gain_mask,
                                                   gain_mask_value=None,
                                                   per_pixel_gain=False)
     data = data.astype(np.float64)
@@ -57,10 +63,8 @@ class FormatXTCCspad(FormatXTC):
       for sensor_count,sensor in enumerate(quad):
         for asic_count,asic in enumerate(sensor):
           fdim,sdim =  asic.get_image_size()
-          asic_data = data[sensor_count, :, asic_count*fdim:(asic_count+1)*fdim]
-          self._raw_data.append(flex.double(np.ascontiguousarray(asic_data)))
-          asic_count +=1
-        sensor_count +=1
+          asic_data = data[sensor_count+quad_count*8, :, asic_count*fdim:(asic_count+1)*fdim] # 8 sensors per quad
+          self._raw_data.append(flex.double(np.array(asic_data)))
     assert len(d) == len(self._raw_data)
     return tuple(self._raw_data)
 
@@ -69,7 +73,7 @@ class FormatXTCCspad(FormatXTC):
 
 
   def get_detector(self, index=None):
-    return self._detector(index)
+    return FormatXTCCspad._detector(self, index)
 
   def get_beam(self, index=None):
     return self._beam(index)
@@ -77,8 +81,10 @@ class FormatXTCCspad(FormatXTC):
   def _beam(self, index=None):
     '''Returns a simple model for the beam '''
     if index is None: index=0
-    evt = self.events_list[index]
-    return self._beam_factory.simple(cspad_tbx.evt_wavelength(evt))
+    evt = self._get_event(index)
+    wavelength = cspad_tbx.evt_wavelength(evt)
+    if wavelength is None: return None
+    return self._beam_factory.simple(wavelength)
 
   def get_goniometer(self, index=None):
       return None
@@ -95,8 +101,9 @@ class FormatXTCCspad(FormatXTC):
     from dxtbx.model import ParallaxCorrectedPxMmStrategy
     if index is None: index = 0
     self._env = self._ds.env()
-    self._det = psana.Detector(self._src,self._env)
-    geom=self._det.pyda.geoaccess(self.events_list[index])
+    assert len(self._src) == 1
+    self._det = psana.Detector(self._src[0],self._env)
+    geom=self._det.pyda.geoaccess(self._get_event(index))
     cob = read_slac_metrology(geometry=geom, include_asic_offset=True)
     d = Detector()
     pg0 = d.hierarchy()

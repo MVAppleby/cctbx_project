@@ -10,7 +10,7 @@ from scitbx.array_family import flex
 from cStringIO import StringIO
 
 from cctbx import crystal
-from iotbx.pdb import write_whole_pdb_file
+from cctbx import xray
 from iotbx import reflection_file_utils
 from iotbx.phil import process_command_line_with_files
 import iotbx.ncs
@@ -20,7 +20,6 @@ from cctbx import maptbx, miller
 from mmtbx.secondary_structure import build as ssb
 from mmtbx.secondary_structure import manager, sec_str_master_phil
 import mmtbx.utils
-from mmtbx.utils import fix_rotamer_outliers
 from mmtbx.building.loop_idealization import loop_idealization
 import mmtbx.building.loop_closure.utils
 from mmtbx.refinement.geometry_minimization import minimize_wrapper_for_ramachandran
@@ -28,6 +27,9 @@ from mmtbx.refinement.real_space.individual_sites import minimize_wrapper_with_m
 from mmtbx.monomer_library.pdb_interpretation import grand_master_phil_str
 from mmtbx.validation.clashscore import check_and_add_hydrogen
 import mmtbx.model
+import mmtbx.refinement.real_space.fit_residues
+import scitbx.math
+import mmtbx.idealized_aa_residues.rotamer_manager
 
 turned_on_ss = ssb.ss_idealization_master_phil_str
 turned_on_ss = turned_on_ss.replace("enabled = False", "enabled = True")
@@ -217,11 +219,10 @@ class model_idealization():
       elif self.cs.unit_cell().volume() < 10:
         corrupted_cs = True
         self.cs = None
-
     # couple checks if pdb_h is ok
     o_c = self.original_hierarchy.overall_counts()
     o_c.raise_duplicate_atom_labels_if_necessary()
-    o_c.raise_residue_groups_with_multiple_resnames_using_same_altloc_if_necessary()
+    # o_c.raise_residue_groups_with_multiple_resnames_using_same_altloc_if_necessary()
     o_c.raise_chains_with_mix_of_proper_and_improper_alt_conf_if_necessary()
     o_c.raise_improper_alt_conf_if_necessary()
     if len(self.original_hierarchy.models()) > 1:
@@ -248,18 +249,19 @@ class model_idealization():
       box = uctbx.non_crystallographic_unit_cell_with_the_sites_in_its_center(
         sites_cart=self.model.get_sites_cart(),
         buffer_layer=3)
-      self.model.set_sites_cart(sites_cart=box.sites_cart)
-      self.original_boxed_hierarchy = self.model.get_hierarchy().deep_copy()
+      # Creating new xrs from box, inspired by extract_box_around_model_and_map
+      sp = crystal.special_position_settings(box.crystal_symmetry())
+      sites_frac = box.sites_frac()
+      xrs_box = self.model.get_xray_structure().replace_sites_frac(box.sites_frac())
+      xray_structure_box = xray.structure(sp, xrs_box.scatterers())
+      self.model.set_xray_structure(xray_structure_box)
       self.cs = box.crystal_symmetry()
-      self.model.set_crystal_symmetry(self.cs, force=True)
       self.shift_vector = box.shift_vector
 
     if self.shift_vector is not None and self.params.debug:
-      write_whole_pdb_file(
-          file_name="%s_boxed.pdb" % self.params.output_prefix,
-          pdb_hierarchy=self.model.get_hierarchy(),
-          crystal_symmetry=self.model.crystal_symmetry(),
-          ss_annotation=self.init_ss_annotation)
+      txt = self.model.model_as_pdb()
+      with open("%s_boxed.pdb" % self.params.output_prefix, 'w') as f:
+        f.write(txt)
 
     if self.params.trim_alternative_conformations:
       self.model.remove_alternative_conformations(always_keep_one_conformer=True)
@@ -289,7 +291,7 @@ class model_idealization():
     self.master_map = self.reference_map.deep_copy()
     if self.model.ncs_constraints_present():
       mask = maptbx.mask(
-              xray_structure=self.model.get_xray_structure().select(self.model.get_master_selection),
+              xray_structure=self.model.get_xray_structure().select(self.model.get_master_selection()),
               n_real=self.master_map.focus(),
               mask_value_inside_molecule=1,
               mask_value_outside_molecule=-1,
@@ -542,7 +544,6 @@ class model_idealization():
           log=self.log)
       self.log.flush()
 
-    # for_stat_h = self.get_intermediate_result_hierarchy()
     self.after_ss_idealization = self.get_statistics(self.model)
     self.shift_and_write_result(
           model=self.model,
@@ -580,24 +581,30 @@ class model_idealization():
     # fixing remaining rotamer outliers
     if (self.params.additionally_fix_rotamer_outliers and
         self.after_loop_idealization.rotamer.outliers > 0.004):
-      print >> self.log, "Processing pdb file again for fixing rotamers..."
-      self.log.flush()
+
       print >> self.log, "Fixing rotamers..."
       self.log.flush()
       if self.params.debug:
         self.shift_and_write_result(
           model = self.model,
           fname_suffix="just_before_rota")
-      fix_rotamer_outliers(
-          model = self.model,
-          map_data=self.master_map,
-          verbose=True,
-          log=self.log)
+
+      result = mmtbx.refinement.real_space.fit_residues.run(
+          pdb_hierarchy     = self.model.get_hierarchy(),
+          crystal_symmetry  = self.model.crystal_symmetry(),
+          map_data          = self.master_map,
+          rotamer_manager   = mmtbx.idealized_aa_residues.rotamer_manager.load(),
+          sin_cos_table     = scitbx.math.sin_cos_table(n=10000),
+          backbone_sample   = False,
+          mon_lib_srv       = self.model.get_mon_lib_srv(),
+          log               = self.log)
+      self.model.set_sites_cart(
+          sites_cart = result.pdb_hierarchy.atoms().extract_xyz(),
+          update_grm = True)
     if self.params.debug:
       self.shift_and_write_result(
           model = self.model,
           fname_suffix="rota_ideal")
-    cs_to_write = self.cs if self.shift_vector is None else None
 
     self.after_rotamer_fixing = self.get_statistics(self.model)
     ref_hierarchy_for_final_gm = self.original_boxed_hierarchy
@@ -639,7 +646,6 @@ class model_idealization():
 
   def add_hydrogens(self):
     # Not used and not working anymore.
-    self.whole_pdb_h = self.get_intermediate_result_hierarchy()
     cs = self.model.crystal_symmetry()
     pdb_str, changed = check_and_add_hydrogen(
         pdb_hierarchy=self.whole_pdb_h,
@@ -926,20 +932,39 @@ def run(args):
   pdb_combined = iotbx.pdb.combine_unique_pdb_files(file_names=work_params.model_file_name)
   pdb_input = iotbx.pdb.input(source_info=None,
     lines=flex.std_string(pdb_combined.raw_records))
+  pdb_cs = pdb_input.crystal_symmetry()
+  crystal_symmetry = None
+  map_cs = None
+  map_content = input_objects.get_file(work_params.map_file_name)
+  if map_content is not None:
+    try:
+      map_cs = map_content.crystal_symmetry()
+    except NotImplementedError as e:
+      pass
+
+  try:
+    crystal_symmetry = crystal.select_crystal_symmetry(
+        from_command_line     = None,
+        from_parameter_file   = None,
+        from_coordinate_files = [pdb_cs],
+        from_reflection_files = [map_cs],
+        enforce_similarity    = True)
+  except AssertionError as e:
+    if len(e.args)>0 and e.args[0].startswith("No unit cell and symmetry information supplied"):
+      pass
+    else:
+      raise e
+
 
   model = mmtbx.model.manager(
       model_input = pdb_input,
       restraint_objects = input_objects.cif_objects,
+      crystal_symmetry = crystal_symmetry,
       process_input = False,
       log=log)
 
-  pdb_cs = model.crystal_symmetry()
-  pdb_h = model.get_hierarchy()
-  map_cs = None
-  crystal_symmetry = None
   map_data = None
   shift_manager = None
-  map_content = input_objects.get_file(work_params.map_file_name)
 
   if map_content is not None:
     map_data, map_cs, shift_manager = get_map_from_map(
@@ -948,7 +973,7 @@ def run(args):
         xrs=model.get_xray_structure(),
         log=log)
     model.set_shift_manager(shift_manager)
-    model.get_hierarchy().write_pdb_file("junk_shift.pdb")
+    # model.get_hierarchy().write_pdb_file("junk_shift.pdb")
 
   hkl_content = input_objects.get_file(work_params.hkl_file_name)
   if hkl_content is not None:
@@ -958,24 +983,6 @@ def run(args):
         xrs=model.get_xray_structure(), # here we don't care about atom order
         log=log)
 
-  # Crystal symmetry: validate and finalize consensus object
-  if shift_manager is not None:
-    crystal_symmetry = map_cs
-  else:
-    try:
-      crystal_symmetry = crystal.select_crystal_symmetry(
-          from_command_line     = None,
-          from_parameter_file   = None,
-          from_coordinate_files = [pdb_cs],
-          from_reflection_files = [map_cs],
-          enforce_similarity    = True)
-    except AssertionError as e:
-      if len(e.args)>0 and e.args[0].startswith("No unit cell and symmetry information supplied"):
-        pass
-      else:
-        raise e
-  # not sure this is right cs to set here...
-  model.set_crystal_symmetry(crystal_symmetry, force=True)
   mi_object = model_idealization(
       model = model,
       map_data = map_data,

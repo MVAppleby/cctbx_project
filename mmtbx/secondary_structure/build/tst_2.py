@@ -1070,7 +1070,6 @@ HELIX    1   1 ALA A    1  ALA A   20  1                                  20
   for i in range(3):
     rm = ssb.substitute_ss(
       model = model,
-      use_plane_peptide_bond_restr=False,
       fix_rotamer_outliers=False)
     model.get_hierarchy().write_pdb_file(file_name=prefix+'%d.pdb' % i)
   model.get_hierarchy().write_pdb_file(file_name=prefix+'h1.pdb')
@@ -1103,7 +1102,6 @@ HELIX    2   2 ARG A   23  GLN A   44  1                                  22
   for i in range(1):
     rm = ssb.substitute_ss(
       model,
-      use_plane_peptide_bond_restr=False,
       )
   d2 = get_distances(model.get_hierarchy())
   model.get_hierarchy().write_pdb_file(file_name=prefix+'_result.pdb')
@@ -1135,7 +1133,7 @@ HELIX    2   2 ARG A   23  GLN A   44  1                                  22
   for i in range(1):
     rm = ssb.substitute_ss(
       model,
-      check_rotamer_clashes=False)
+      fix_rotamer_outliers=False)
   d2 = get_distances(model.get_hierarchy(), n_neighbours=20)
   # h.write_pdb_file(file_name=prefix+'_result.pdb')
   dist = abs(d2-d1)
@@ -1192,7 +1190,7 @@ HELIX   13  13 SER A  466  TYR A  472  1                                   7
   # h.write_pdb_file(file_name="start.pdb")
   rm = ssb.substitute_ss(
       model,
-      check_rotamer_clashes=False)
+      fix_rotamer_outliers=False)
   # h.write_pdb_file(file_name="result.pdb")
   d1 = get_distances(model.get_hierarchy(), 5)
   answer_h = iotbx.pdb.input(

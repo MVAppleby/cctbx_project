@@ -1820,8 +1820,9 @@ def clear_empty_lines(text):
   return "\n".join(new_lines)+"\n"
 
 
-def get_sequences(file_name=None,text=None):
-  # return simple list of sequences in this file. duplicates included.
+def get_sequences(file_name=None,text=None,remove_duplicates=None):
+  # return simple list of sequences in this file. duplicates included
+  #  unless remove_duplicates=True
   if not text:
     if not file_name:
       from libtbx.utils import Sorry
@@ -1835,8 +1836,46 @@ def get_sequences(file_name=None,text=None):
   ( sequences, unknowns ) = parse_sequence( text )
   simple_sequence_list=[]
   for sequence in sequences:
-    simple_sequence_list.append(sequence.sequence)
+    if remove_duplicates and sequence.sequence in simple_sequence_list:
+      continue # it is a duplicate
+    else: # take it
+      simple_sequence_list.append(sequence.sequence)
   return simple_sequence_list
+
+def get_sequence_from_pdb(file_name=None,text=None,hierarchy=None):
+  if not hierarchy:
+    # read from PDB
+    if not text:
+      if not file_name:
+        from libtbx.utils import Sorry
+        raise Sorry("Missing file for get_sequence_from_pdb: %s" %(
+          file_name))
+      text=open(file_name).read()
+    import iotbx.pdb
+    pdb_inp = iotbx.pdb.input(lines=text.splitlines(),source_info="None")
+    import mmtbx.model
+    mm = mmtbx.model.manager(
+          model_input = pdb_inp,
+          stop_for_unknowns = False)
+    hierarchy=mm.get_hierarchy()
+  chain_sequences=[]
+  from iotbx.pdb import amino_acid_codes as aac
+  one_letter_code_dict = aac.one_letter_given_three_letter
+
+
+  for model in hierarchy.models():
+    for chain in model.chains():
+      chain_sequence=""
+      for rg in chain.residue_groups():
+        for atom_group in rg.atom_groups():
+          chain_sequence+=one_letter_code_dict.get(atom_group.resname,"")
+          break
+      chain_sequences.append(chain_sequence)
+  sequence_as_string=""
+  for chain_sequence in chain_sequences:
+    sequence_as_string+=chain_sequence+"\n"
+  return sequence_as_string
+
 
 def guess_chain_types_from_sequences(file_name=None,text=None,
     return_as_dict=False,minimum_fraction=None,

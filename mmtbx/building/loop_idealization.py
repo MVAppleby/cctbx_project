@@ -15,7 +15,9 @@ from cStringIO import StringIO
 from mmtbx.conformation_dependent_library import generate_protein_threes
 import math
 from libtbx import easy_pickle, Auto
-
+import scitbx.math
+import mmtbx.idealized_aa_residues.rotamer_manager
+import mmtbx.refinement.real_space.fit_residues
 
 #import boost.python
 #ext = boost.python.import_ext("mmtbx_validation_ramachandran_ext")
@@ -81,6 +83,15 @@ loop_idealization
 
 master_phil = iotbx.phil.parse(loop_idealization_master_phil_str)
 
+#
+# XXX
+# XXX  This needs to be much more general tool to be called loop idealization.
+# XXX  Right now it is just Ramachandran idealization. This should be
+# XXX  separated. Loop idealization should include Cablam and Rama idealization.
+# XXX
+#
+
+
 class loop_idealization():
   def __init__(self,
                model,
@@ -101,6 +112,9 @@ class loop_idealization():
     self.verbose = verbose
     self.ideal_res_dict = idealized_aa.residue_dict()
     self.n_run = n_run
+
+    iaar_rotamer_manager = mmtbx.idealized_aa_residues.rotamer_manager.load()
+    sin_cos_table = scitbx.math.sin_cos_table(n=10000)
 
     ram = ramalyze.ramalyze(pdb_hierarchy=self.model.get_hierarchy())
     self.p_initial_rama_outliers = ram.out_percent
@@ -212,15 +226,19 @@ class loop_idealization():
         if len(excl_sel) == 0:
           excl_sel = None
         non_outliers_for_check = self.model.selection("(%s)" % self.ref_exclusion_selection)
-        mmtbx.utils.fix_rotamer_outliers(
-          model = self.model,
-          map_data=self.reference_map,
-          radius=5,
-          backrub_range=None, # don't sample backrub at this point
-          non_outliers_to_check=non_outliers_for_check, # bool selection
-          verbose=True,
-          log=self.log)
 
+        result = mmtbx.refinement.real_space.fit_residues.run(
+            pdb_hierarchy     = self.model.get_hierarchy(),
+            crystal_symmetry  = self.model.crystal_symmetry(),
+            map_data          = self.reference_map,
+            rotamer_manager   = iaar_rotamer_manager,
+            sin_cos_table     = sin_cos_table,
+            backbone_sample   = False,
+            mon_lib_srv       = self.model.get_mon_lib_srv(),
+            log               = self.log)
+        model.set_sites_cart(
+            sites_cart = result.pdb_hierarchy.atoms().extract_xyz(),
+            update_grm = True)
         if self.reference_map is None:
           minimize_wrapper_for_ramachandran(
               model = self.model,
@@ -936,7 +954,7 @@ def get_fixed_moving_parts(pdb_hierarchy, out_res_num_list, n_following, n_previ
   # print "POSSIBLE ERROR:", "selectioin:", "(name N or name CA or name C or name O) and resid %s through %s" % (
   #         start_res_num, end_res_num)
   m_selection = cache.iselection(
-      "(name N or name CA or name C or name O) and resid %s through %s" % (
+      "(name N or name CA or name C or name O) and resid %s:%s" % (
           start_res_num, end_res_num))
   # Somewhere here would be the place to tweak n_following, n_previous to
   # exclude SS parts. It would be nice to increase n_prev in case
@@ -955,9 +973,13 @@ def get_fixed_moving_parts(pdb_hierarchy, out_res_num_list, n_following, n_previ
       assert intersect_h.atoms_size() > 0, "Wrong atom count in SS intersection"
       # assert 0, "hitting SS element!"
 
-
+  # print "m_selection=", list(m_selection)
   moving_h = pdb_hierarchy.select(m_selection)
   moving_h.reset_atom_i_seqs()
+  # print >> log, "Moving h:"
+  # print >> log, moving_h.as_pdb_string()
+  # for rg in moving_h.only_chain().residue_groups():
+  #   print >> log, "rg:", rg.resseq
   # print dir(moving_h)
   # STOP()
   m_cache = moving_h.atom_selection_cache()
@@ -974,7 +996,11 @@ def get_fixed_moving_parts(pdb_hierarchy, out_res_num_list, n_following, n_previ
       int_eff_resnum -= 1
     else:
       int_eff_resnum += 1
+    # print >> log, "resid %d" % int_eff_resnum
     sel = m_cache.selection("resid %d" % int_eff_resnum)
+    # print >> log, "sel:", list(sel)
+    if int_eff_resnum < -10:
+      assert 0
   eff_end_resnum = hy36encode(4, int_eff_resnum)
 
   anchor_present = True
